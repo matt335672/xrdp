@@ -156,6 +156,11 @@ env_set_user(int uid, char **passwd_file, int display,
              * xorgxrdp and the pulseaudio plugin */
             g_snprintf(text, sizeof(text), XRDP_SOCKET_PATH, uid);
             g_setenv("XRDP_SOCKET_PATH", text, 1);
+            /* PCSCLITE_CSOCK_NAME is used to provide a fake pcscd
+             * service to the session. It is under XRDP_SOCKET_PATH */
+            g_snprintf(text, sizeof(text), "%s/pcsc_socket_%d",
+                       g_getenv("XRDP_SOCKET_PATH"), display);
+            g_setenv("PCSCLITE_CSOCK_NAME", text, 1);
             /* pulse sink socket */
             g_snprintf(text, sizeof(text), CHANSRV_PORT_OUT_BASE_STR, display);
             g_setenv("XRDP_PULSE_SINK_SOCKET", text, 1);
