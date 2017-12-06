@@ -54,6 +54,7 @@
 #include "chansrv.h"
 #include "list.h"
 #include "defines.h"
+#include "xrdp_sockets.h"
 
 #if PCSC_STANDIN
 
@@ -1727,6 +1728,7 @@ static int
 scard_process_cmd_get_readers_state(struct trans *con, struct stream *in_s)
 {
     int rv;
+    int reader_state_bytes;
     struct stream *out_s;
     struct pcsc_uds_client *uds_client;
 
@@ -1734,8 +1736,9 @@ scard_process_cmd_get_readers_state(struct trans *con, struct stream *in_s)
     rv = 0;
     uds_client = (struct pcsc_uds_client *) (con->callback_data);
     out_s = con->out_s;
-    init_stream(out_s, sizeof(uds_client->readerStates));
-    out_uint8a(out_s, uds_client->readerStates, sizeof(uds_client->readerStates));
+    reader_state_bytes = sizeof(uds_client->readerStates);
+    init_stream(out_s, reader_state_bytes);
+    out_uint8a(out_s, uds_client->readerStates, reader_state_bytes);
     s_mark_end(out_s);
     rv = trans_write_copy(con);
     return rv;
@@ -2279,7 +2282,8 @@ scard_pcsc_init(void)
         else
         {
             disp = g_display_num;
-            g_snprintf(g_pcsclite_ipc_file, 255, "/tmp/.xrdp/pcscd%d.com", disp);
+            g_snprintf(g_pcsclite_ipc_file, 255, XRDP_PCSC_STR,
+                       g_getuid(), disp);
         }
         LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_pcsc_init: trans_listen on port %s", g_pcsclite_ipc_file);
         g_lis->trans_conn_in = my_pcsc_trans_conn_in;
