@@ -27,6 +27,7 @@
 #endif
 
 #include "os_calls.h"
+#include "log.h"
 
 #include "chansrv_xfs.h"
 
@@ -113,47 +114,10 @@ struct xfs_dir_handle
     tui32       generation;
 };
 
-/* module based logging */
-#define LOG_ERROR   0
-#define LOG_INFO    1
-#define LOG_DEBUG   2
-#ifndef LOG_LEVEL
-#define LOG_LEVEL   LOG_ERROR
-#endif
+/* Unified logging with rest of chansrv */
+#define LOGM(_args) do { log_message _args ; } while (0)
+#define FACILITY "xfs: " /* Used to label log entries */
 
-#define log_error(_params...)                           \
-    {                                                       \
-        g_write("[%10.10u]: XFS        %s: %d : ERROR: ",   \
-                g_time3(), __func__, __LINE__);             \
-        g_writeln (_params);                                \
-    }
-
-#define log_always(_params...)                          \
-    {                                                       \
-        g_write("[%10.10u]: XFS        %s: %d : ALWAYS: ",  \
-                g_time3(), __func__, __LINE__);             \
-        g_writeln (_params);                                \
-    }
-
-#define log_info(_params...)                            \
-    {                                                       \
-        if (LOG_INFO <= LOG_LEVEL)                          \
-        {                                                   \
-            g_write("[%10.10u]: XFS        %s: %d : ",      \
-                    g_time3(), __func__, __LINE__);         \
-            g_writeln (_params);                            \
-        }                                                   \
-    }
-
-#define log_debug(_params...)                           \
-    {                                                       \
-        if (LOG_DEBUG <= LOG_LEVEL)                         \
-        {                                                   \
-            g_write("[%10.10u]: XFS        %s: %d : ",      \
-                    g_time3(), __func__, __LINE__);         \
-            g_writeln (_params);                            \
-        }                                                   \
-    }
 
 /*  ------------------------------------------------------------------------ */
 static int
@@ -166,7 +130,13 @@ grow_xfs(struct xfs_fs *xfs, unsigned int extra_inodes)
 
     new_table = (XFS_INODE_ALL **)
                 realloc(xfs->inode_table, new_count * sizeof(new_table[0]));
-    if (new_table != NULL)
+    if (new_table == NULL)
+    {
+        LOGM((LOG_LEVEL_ERROR,
+              FACILITY "failed to grow XFS to %u entries",
+              new_count));
+    }
+    else
     {
         unsigned int i;
         for (i = xfs->inode_count ; i < new_count ; ++i)
@@ -178,7 +148,13 @@ grow_xfs(struct xfs_fs *xfs, unsigned int extra_inodes)
         new_free_list = (fuse_ino_t *)
                         realloc(xfs->free_list,
                                 new_count * sizeof(new_free_list[0]));
-        if (new_free_list)
+        if (new_free_list == NULL)
+        {
+            LOGM((LOG_LEVEL_ERROR,
+                  FACILITY "failed to grow XFS free list to %u entries",
+                  new_count));
+        }
+        else
         {
             /* Add the new inodes in to the new_free_list, so the lowest
              * number is allocated first
@@ -414,12 +390,33 @@ xfs_add_entry(struct xfs_fs *xfs, fuse_ino_t parent_inum,
      * 3) Name's not too long
      * 4) Entry does not already exist
      */
-    if (parent_inum < xfs->inode_count &&
-            ((parent = xfs->inode_table[parent_inum]) != NULL) &&
-            (parent->pub.mode & S_IFDIR) != 0 &&
-            parent_inum != DELETE_PENDING_ID &&
-            strlen(name) <= XFS_MAXFILENAMELEN &&
-            !xfs_lookup_in_dir(xfs, parent_inum, name))
+    if (parent_inum >= xfs->inode_count ||
+            ((parent = xfs->inode_table[parent_inum]) == NULL))
+    {
+        LOGM((LOG_LEVEL_WARNING,
+              FACILITY "add_entry - invalid parent %ld", (long)parent_inum));
+    }
+    else if ((parent->pub.mode & S_IFDIR) == 0)
+    {
+        LOGM((LOG_LEVEL_WARNING,
+              FACILITY "add_entry - parent %ld (%s) is not a directory",
+              (long)parent_inum, parent->pub.name));
+    }
+    else if (parent_inum == DELETE_PENDING_ID)
+    {
+        LOGM((LOG_LEVEL_WARNING,
+              FACILITY "can't add to delete pending directory"));
+    }
+    else if (strlen(name) > XFS_MAXFILENAMELEN)
+    {
+        LOGM((LOG_LEVEL_DEBUG, FACILITY "add_entry - name too long"));
+    }
+    else if (xfs_lookup_in_dir(xfs, parent_inum, name))
+    {
+        LOGM((LOG_LEVEL_WARNING,
+              FACILITY "add_entry - duplicate name '%s'", name));
+    }
+    else
     {
         /* Sanitise the mode so one-and-only-one of S_IFDIR and
          * S_IFREG is set */
@@ -443,8 +440,9 @@ xfs_add_entry(struct xfs_fs *xfs, fuse_ino_t parent_inum,
                 fuse_ino_t inum = xfs->free_list[--xfs->free_count];
                 if (xfs->inode_table[inum] != NULL)
                 {
-                    log_error("Unexpected non-NULL value in inode table "
-                              "entry %ld", inum);
+                    LOGM((LOG_LEVEL_WARNING,
+                          FACILITY "Unexpected non-NULL value in inode table "
+                          "entry %ld", (long)inum));
                 }
                 xfs->inode_table[inum] = xino;
                 xino->pub.inum = inum;
@@ -560,20 +558,26 @@ xfs_get_full_path(struct xfs_fs *xfs, fuse_ino_t inum)
              */
             size_t len = 0;
             XFS_INODE_ALL *p;
-            for (p = xino ; p->pub.inum != FUSE_ROOT_ID ; p = p->parent)
+            for (p = xino ; p && p->pub.inum != FUSE_ROOT_ID ; p = p->parent)
             {
                 len += strlen(p->pub.name);
                 ++len; /* Allow for '/' prefix */
             }
 
             result = (char *) malloc(len + 1);
-            if (result != NULL)
+            if (result == NULL)
+            {
+                LOGM((LOG_LEVEL_ERROR,
+                      FACILITY "get_full_path - can't allocate %zd bytes",
+                      len + 1));
+            }
+            else
             {
                 /* Construct the path from the end */
                 char *end = result + len;
                 *end = '\0';
 
-                for (p = xino ; p->pub.inum != FUSE_ROOT_ID ; p = p->parent)
+                for (p = xino ; p && p->pub.inum != FUSE_ROOT_ID ; p = p->parent)
                 {
                     len = strlen(p->pub.name);
                     end -= (len + 1);
@@ -667,16 +671,25 @@ xfs_opendir(struct xfs_fs *xfs, fuse_ino_t dir)
     XFS_INODE_ALL *xino =  NULL;
     struct xfs_dir_handle *result = NULL;
 
-    if (dir < xfs->inode_count &&
-            ((xino = xfs->inode_table[dir]) != NULL) &&
-            (xino->pub.mode & S_IFDIR) != 0)
+    if (dir >= xfs->inode_count || ((xino = xfs->inode_table[dir]) == NULL))
     {
-        result = g_new0(struct xfs_dir_handle, 1);
-        if (result)
-        {
-            result->inum = xino->pub.inum;
-            result->generation = xino->pub.generation;
-        }
+        LOGM((LOG_LEVEL_WARNING,
+              FACILITY "opendir - invalid directory %ld", (long)dir));
+    }
+    else if ((xino->pub.mode & S_IFDIR) == 0)
+    {
+        LOGM((LOG_LEVEL_WARNING,
+              FACILITY "opendir - inode %ld (%s) is not a directory",
+              (long)dir, xino->pub.name));
+    }
+    else if ((result = g_new0(struct xfs_dir_handle, 1)) == NULL)
+    {
+        LOGM((LOG_LEVEL_ERROR, FACILITY "opendir - no memory"));
+    }
+    else
+    {
+        result->inum = xino->pub.inum;
+        result->generation = xino->pub.generation;
     }
 
     return result;
@@ -852,15 +865,45 @@ xfs_check_move_entry(struct xfs_fs *xfs, fuse_ino_t inum,
     XFS_INODE_ALL *xino;
     XFS_INODE_ALL *parent;
 
-    return
-        (strlen(name) <= XFS_MAXFILENAMELEN &&
-         inum < xfs->inode_count &&
-         ((xino = xfs->inode_table[inum]) != NULL) &&
-         new_parent_inum != DELETE_PENDING_ID &&
-         new_parent_inum < xfs->inode_count &&
-         ((parent = xfs->inode_table[new_parent_inum]) != NULL) &&
-         (parent->pub.mode & S_IFDIR) != 0 &&
-         xfs_is_under(xfs, inum, new_parent_inum) == 0);
+    int result = 0;
+
+    if (strlen(name) > XFS_MAXFILENAMELEN)
+    {
+        LOGM((LOG_LEVEL_DEBUG, FACILITY "check_move_entry - name too long"));
+    }
+    else if (inum >= xfs->inode_count ||
+         (xino = xfs->inode_table[inum]) == NULL)
+    {
+        LOGM((LOG_LEVEL_INFO,
+              FACILITY "check_move_entry - invalid source directory"));
+    }
+    else if (new_parent_inum == DELETE_PENDING_ID)
+    {
+        LOGM((LOG_LEVEL_INFO,
+              FACILITY "can't move files to delete pending directory"));
+    }
+    else if (new_parent_inum >= xfs->inode_count ||
+         (parent = xfs->inode_table[new_parent_inum]) == NULL)
+    {
+        LOGM((LOG_LEVEL_INFO,
+              FACILITY "check_move_entry - invalid destination directory"));
+    }
+    else if ((parent->pub.mode & S_IFDIR) == 0)
+    {
+        LOGM((LOG_LEVEL_INFO,
+              FACILITY "check_move_entry - destination is not a directory"));
+    }
+    else if (xfs_is_under(xfs, inum, new_parent_inum) == 0)
+    {
+        LOGM((LOG_LEVEL_INFO,
+              FACILITY "check_move_entry - destination is under source"));
+    }
+    else
+    {
+        result = 1;
+    }
+
+    return result;
 }
 
 /*  ------------------------------------------------------------------------ */

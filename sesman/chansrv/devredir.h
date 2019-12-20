@@ -81,7 +81,7 @@ int devredir_file_close(struct state_close *fusep, tui32 device_id,
 int devredir_file_read(struct state_read *fusep, tui32 device_id, tui32 FileId,
                         tui32 Length, tui64 Offset);
 
-int
+void
 devredir_file_write(struct state_write *fusep, tui32 DeviceId, tui32 FileId,
                      const char *buf, int Length, tui64 Offset);
 
