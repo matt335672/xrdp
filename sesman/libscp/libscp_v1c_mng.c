@@ -28,10 +28,13 @@
 #include <config_ac.h>
 #endif
 
-#include "libscp_v1c_mng.h"
-
 #include <stdlib.h>
 #include <stdio.h>
+
+#include "libscp_v1c_mng.h"
+#include "libscp_commands_mng.h"
+#include "libscp_session.h"
+#include "libscp_tcp.h"
 
 //extern struct log_config* s_log;
 
@@ -265,100 +268,6 @@ scp_v1c_mng_get_session_list(struct SCP_CONNECTION *c, int *scount,
     LOG_DEVEL(LOG_LEVEL_DEBUG, "[v1c_mng] end list");
     return SCP_CLIENT_STATE_LIST_OK;
 }
-
-/* 043 * /
-enum SCP_CLIENT_STATES_E
-scp_v1c_select_session(struct SCP_CONNECTION* c, struct SCP_SESSION* s,
-                       SCP_SID sid)
-{
-  tui32 version = 1;
-  tui32 size = 16;
-  tui16 cmd = 43;
-
-  init_stream(c->out_s, c->out_s->size);
-
-  / * sending our selection * /
-  out_uint32_be(c->out_s, version);                 / * version * /
-  out_uint32_be(c->out_s, size);                    / * size    * /
-  out_uint16_be(c->out_s, SCP_COMMAND_SET_DEFAULT); / * cmdset  * /
-  out_uint16_be(c->out_s, cmd);                     / * cmd     * /
-
-  out_uint32_be(c->out_s, sid);
-
-  if (0 != scp_tcp_force_send(c->in_sck, c->out_s->data, size))
-  {
-    return SCP_CLIENT_STATE_NETWORK_ERR;
-  }
-
-  / * waiting for response.... * /
-  init_stream(c->in_s, c->in_s->size);
-  if (0 != scp_tcp_force_recv(c->in_sck, c->in_s->data, 8))
-  {
-    return SCP_CLIENT_STATE_NETWORK_ERR;
-  }
-
-  in_uint32_be(c->in_s, version);
-  if (version != 1)
-  {
-    return SCP_CLIENT_STATE_VERSION_ERR;
-  }
-
-  in_uint32_be(c->in_s, size);
-  if (size < 12)
-  {
-    return SCP_CLIENT_STATE_SIZE_ERR;
-  }
-
-  init_stream(c->in_s, c->in_s->size);
-  / * read the rest of the packet * /
-  if (0 != scp_tcp_force_recv(c->in_sck, c->in_s->data, size - 8))
-  {
-    return SCP_CLIENT_STATE_NETWORK_ERR;
-  }
-
-  in_uint16_be(c->in_s, cmd);
-  if (cmd != SCP_COMMAND_SET_DEFAULT)
-  {
-    return SCP_CLIENT_STATE_SEQUENCE_ERR;
-  }
-
-  in_uint16_be(c->in_s, cmd);
-  if (cmd != 46)
-  {
-    return SCP_CLIENT_STATE_SEQUENCE_ERR;
-  }
-
-  / * session display * /
-  in_uint16_be(c->in_s, (s->display));
-  / *we don't need to return any data other than the display * /
-  / *because we already sent that                            * /
-
-  return SCP_CLIENT_STATE_OK;
-}*/
-
-/* 044 * /
-enum SCP_CLIENT_STATES_E
-scp_v1c_select_session_cancel(struct SCP_CONNECTION* c)
-{
-  tui32 version = 1;
-  tui32 size = 12;
-  tui16 cmd = 44;
-
-  init_stream(c->out_s, c->out_s->size);
-
-  / * sending our selection * /
-  out_uint32_be(c->out_s, version);                 / * version * /
-  out_uint32_be(c->out_s, size);                    / * size    * /
-  out_uint16_be(c->out_s, SCP_COMMAND_SET_DEFAULT); / * cmdset  * /
-  out_uint16_be(c->out_s, cmd);                     / * cmd     * /
-
-  if (0 != scp_tcp_force_send(c->in_sck, c->out_s->data, size))
-  {
-    return SCP_CLIENT_STATE_NETWORK_ERR;
-  }
-
-  return SCP_CLIENT_STATE_END;
-}*/
 
 static enum SCP_CLIENT_STATES_E
 _scp_v1c_mng_check_response(struct SCP_CONNECTION *c, struct SCP_SESSION *s)

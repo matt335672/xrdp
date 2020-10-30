@@ -28,11 +28,15 @@
 #include <config_ac.h>
 #endif
 
-#include "libscp_session.h"
-
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
+
+#include "libscp_session.h"
+#include "libscp_types.h"
+
+#include "log.h"
+#include "os_calls.h"
 
 //extern struct log_config* s_log;
 

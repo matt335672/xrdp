@@ -27,7 +27,7 @@
 #ifndef LIBSCP_V1S_MNG_H
 #define LIBSCP_V1S_MNG_H
 
-#include "libscp.h"
+#include "libscp_types.h"
 
 /* server API */
 /**
@@ -40,7 +40,7 @@
  * that should be free()d
  */
 enum SCP_SERVER_STATES_E
-scp_v1s_mng_accept(struct SCP_CONNECTION* c, struct SCP_SESSION** s);
+scp_v1s_mng_accept(struct SCP_CONNECTION* c, struct SCP_SESSION** s, int skipVchk);
 
 /**
  *

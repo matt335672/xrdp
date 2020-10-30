@@ -27,7 +27,7 @@
 #ifndef LIBSCP_V0_H
 #define LIBSCP_V0_H
 
-#include "libscp.h"
+#include "libscp_types.h"
 
 /* client API */
 /**

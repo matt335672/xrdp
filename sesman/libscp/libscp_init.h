@@ -29,8 +29,6 @@
 
 #include "log.h"
 
-#include "libscp.h"
-
 /**
  *
  * @brief version neutral server accept function

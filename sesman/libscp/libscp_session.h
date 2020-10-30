@@ -27,7 +27,7 @@
 #ifndef LIBSCP_SESSION_H
 #define LIBSCP_SESSION_H
 
-#include "libscp.h"
+#include "libscp_types.h"
 
 /**
  *

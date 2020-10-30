@@ -27,8 +27,6 @@
 #ifndef SCP_V0_H
 #define SCP_V0_H
 
-#include "libscp.h"
-
 /**
  *
  * @brief processes the stream using scp version 0

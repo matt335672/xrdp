@@ -30,6 +30,9 @@
 
 #include "libscp_tcp.h"
 
+#include "log.h"
+#include "os_calls.h"
+
 extern struct log_config *s_log;
 
 /*****************************************************************************/
@@ -37,11 +40,8 @@ int
 scp_tcp_force_recv(int sck, char *data, int len)
 {
     int rcvd;
-    int block;
 
     LOG_DEVEL(LOG_LEVEL_DEBUG, "scp_tcp_force_recv()");
-    block = scp_lock_fork_critical_section_start();
-
     while (len > 0)
     {
         rcvd = g_tcp_recv(sck, data, len, 0);
@@ -54,13 +54,11 @@ scp_tcp_force_recv(int sck, char *data, int len)
             }
             else
             {
-                scp_lock_fork_critical_section_end(block);
                 return 1;
             }
         }
         else if (rcvd == 0)
         {
-            scp_lock_fork_critical_section_end(block);
             return 1;
         }
         else
@@ -70,8 +68,6 @@ scp_tcp_force_recv(int sck, char *data, int len)
         }
     }
 
-    scp_lock_fork_critical_section_end(block);
-
     return 0;
 }
 
@@ -80,10 +76,8 @@ int
 scp_tcp_force_send(int sck, char *data, int len)
 {
     int sent;
-    int block;
 
     LOG_DEVEL(LOG_LEVEL_DEBUG, "scp_tcp_force_send()");
-    block = scp_lock_fork_critical_section_start();
 
     while (len > 0)
     {
@@ -97,13 +91,11 @@ scp_tcp_force_send(int sck, char *data, int len)
             }
             else
             {
-                scp_lock_fork_critical_section_end(block);
                 return 1;
             }
         }
         else if (sent == 0)
         {
-            scp_lock_fork_critical_section_end(block);
             return 1;
         }
         else
@@ -112,8 +104,6 @@ scp_tcp_force_send(int sck, char *data, int len)
             len -= sent;
         }
     }
-
-    scp_lock_fork_critical_section_end(block);
 
     return 0;
 }

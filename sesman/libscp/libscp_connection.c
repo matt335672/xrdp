@@ -29,6 +29,9 @@
 #endif
 
 #include "libscp_connection.h"
+#include "libscp_types.h"
+#include "log.h"
+#include "os_calls.h"
 
 //extern struct log_config* s_log;
 

@@ -27,8 +27,6 @@
 #ifndef LIBSCP_TCP_H
 #define LIBSCP_TCP_H
 
-#include "libscp.h"
-
 /**
  *
  * @brief Force receiving data from tcp stream

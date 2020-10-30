@@ -30,7 +30,7 @@
 
 #include "sesman.h"
 
-#include "libscp.h"
+#include "libscp_v1s_mng.h"
 
 extern struct config_sesman *g_cfg; /* in sesman.c */
 
@@ -40,39 +40,18 @@ static void parseCommonStates(enum SCP_SERVER_STATES_E e, const char *f);
 void
 scp_v1_mng_process(struct SCP_CONNECTION *c, struct SCP_SESSION *s)
 {
-    long data;
     enum SCP_SERVER_STATES_E e;
     struct SCP_DISCONNECTED_SESSION *slist = 0;
     int scount;
     int end = 0;
 
-    data = auth_userpass(s->username, s->password,NULL);
-    /*LOG_DEVEL(LOG_LEVEL_DEBUG, "user: %s\npass: %s", s->username, s->password);*/
-
-    if (!data)
-    {
-        scp_v1s_mng_deny_connection(c, "Login failed");
-        log_message(LOG_LEVEL_INFO,
-                    "[MNG] Login failed for user %s. Connection terminated", s->username);
-        auth_end(data);
-        return;
-    }
-
-    /* testing if login is allowed */
-    if (0 == access_login_mng_allowed(s->username))
-    {
-        scp_v1s_mng_deny_connection(c, "Access to Terminal Server not allowed.");
-        log_message(LOG_LEVEL_INFO,
-                    "[MNG] User %s not allowed on TS. Connection terminated", s->username);
-        auth_end(data);
-        return;
-    }
-
+    /*
+     * V1 connections are currently unauthenticated - the username and
+     * password is ignored
+     */
     e = scp_v1s_mng_allow_connection(c, s);
 
-    end = 1;
-
-    while (end)
+    while (!end)
     {
         switch (e)
         {
@@ -95,13 +74,10 @@ scp_v1_mng_process(struct SCP_CONNECTION *c, struct SCP_SESSION *s)
             default:
                 /* we check the other errors */
                 parseCommonStates(e, "scp_v1s_mng_list_sessions()");
-                end = 0;
+                end = 1;
                 break;
         }
     }
-
-    /* cleanup */
-    auth_end(data);
 }
 
 static void parseCommonStates(enum SCP_SERVER_STATES_E e, const char *f)

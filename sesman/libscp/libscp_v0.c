@@ -29,6 +29,8 @@
 #endif
 
 #include "libscp_v0.h"
+#include "libscp_session.h"
+#include "libscp_tcp.h"
 
 #include "os_calls.h"
 

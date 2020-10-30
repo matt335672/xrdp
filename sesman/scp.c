@@ -33,6 +33,9 @@
 
 #include "sesman.h"
 
+#include "libscp_vX.h"
+#include "libscp_session.h"
+
 extern struct config_sesman *g_cfg; /* in sesman.c */
 
 /******************************************************************************/
@@ -55,19 +58,15 @@ scp_process_start(void *sck)
     {
         case SCP_SERVER_STATE_OK:
 
-            if (sdata->version == 0)
+            if (sdata->version != 0)
             {
                 /* starts processing an scp v0 connection */
-                LOG_DEVEL(LOG_LEVEL_DEBUG, "accept ok, go on with scp v0");
-                scp_v0_process(&scon, sdata);
+                LOG(LOG_LEVEL_ERROR, "Can only service V0 connection requests");
             }
             else
             {
-                LOG_DEVEL(LOG_LEVEL_DEBUG, "accept ok, go on with scp v1");
-                /*LOG_DEVEL(LOG_LEVEL_DEBUG, "user: %s\npass: %s",sdata->username, sdata->password);*/
-                scp_v1_process(&scon, sdata);
+                scp_v0_process(&scon, sdata);
             }
-
             break;
         case SCP_SERVER_STATE_START_MANAGE:
             /* starting a management session */

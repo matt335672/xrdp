@@ -30,6 +30,9 @@
 
 #include "sesman.h"
 
+#include "libscp_v0.h"
+#include "libscp_session.h"
+
 extern struct config_sesman *g_cfg; /* in sesman.c */
 
 /******************************************************************************/

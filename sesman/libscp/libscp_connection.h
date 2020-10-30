@@ -27,7 +27,7 @@
 #ifndef LIBSCP_CONNECTION_H
 #define LIBSCP_CONNECTION_H
 
-#include "libscp.h"
+struct SCP_CONNECTION;
 
 /**
  *

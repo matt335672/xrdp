@@ -53,8 +53,6 @@ xrdp_sesman_SOURCES = \
   scp.h \
   scp_v0.c \
   scp_v0.h \
-  scp_v1.c \
-  scp_v1.h \
   scp_v1_mng.c \
   scp_v1_mng.h \
   sesman.c \

@@ -14,17 +14,17 @@ command.
 .PP
 \fBxrdp\-sesadmin\fP is a console program to administer running XRDP sessions.
 
+At present, this can be used for display purposes only.
+
 .SH OPTIONS
 A summary of options is included below.
 .TP
 .BI \-u= username
-\fIUsername\fP for authentication on the server.
-Defaults to \fBroot\fP.
+Accepted for compatibility, but currently ignored.
 
 .TP
 .BI \-p= password
-The \fIpassword\fP to authenticate with.
-The default is to ask for the password interactively.
+Accepted for compatibility, but currently ignored.
 
 .TP
 .BI \-s= server
@@ -44,14 +44,10 @@ Valid commands are:
 .TP
 .B list
 List currently active sessions.
-.TP
-.BI kill: sid
-Kills the session specified the given \fIsession id\fP.
-(not yet implemented).
 .RE
 
 .SH FILES
-xrdp\-sesadmin.log
+None
 
 .SH SEE ALSO
 .BR xrdp (8).

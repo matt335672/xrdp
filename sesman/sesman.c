@@ -30,6 +30,9 @@
 
 #include "sesman.h"
 
+#include "libscp_init.h"
+#include "libscp_tcp.h"
+
 int g_sck;
 int g_pid;
 unsigned char g_fixedkey[8] = { 23, 82, 107, 6, 35, 78, 88, 7 };

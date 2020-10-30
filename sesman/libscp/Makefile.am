@@ -20,8 +20,6 @@ libscp_la_SOURCES = \
   libscp_connection.h \
   libscp_init.c \
   libscp_init.h \
-  libscp_lock.c \
-  libscp_lock.h \
   libscp_session.c \
   libscp_session.h \
   libscp_tcp.c \
@@ -30,17 +28,12 @@ libscp_la_SOURCES = \
   libscp_types_mng.h \
   libscp_v0.c \
   libscp_v0.h \
-  libscp_v1c.c \
-  libscp_v1c.h \
   libscp_v1c_mng.c \
   libscp_v1c_mng.h \
-  libscp_v1s.c \
-  libscp_v1s.h \
   libscp_v1s_mng.c \
   libscp_v1s_mng.h \
   libscp_vX.c \
   libscp_vX.h
 
 libscp_la_LIBADD = \
-  $(top_builddir)/common/libcommon.la \
-  -lpthread
+  $(top_builddir)/common/libcommon.la

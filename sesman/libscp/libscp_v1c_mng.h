@@ -27,25 +27,12 @@
 #ifndef LIBSCP_V1C_MNG_H
 #define LIBSCP_V1C_MNG_H
 
-#include "libscp.h"
+#include "libscp_types.h"
 
 /* client API */
 /* 001 */
 enum SCP_CLIENT_STATES_E
 scp_v1c_mng_connect(struct SCP_CONNECTION* c, struct SCP_SESSION* s);
-
-/* 004 * /
-enum SCP_CLIENT_STATES_E
-scp_v1c_resend_credentials(struct SCP_CONNECTION* c, struct SCP_SESSION* s);
-
-/ * 021 * /
-enum SCP_CLIENT_STATES_E
-scp_v1c_pwd_change(struct SCP_CONNECTION* c, char* newpass);
-
-/ * 022 * /
-enum SCP_CLIENT_STATES_E
-scp_v1c_pwd_change_cancel(struct SCP_CONNECTION* c);
-*/
 
 /* 041 */
 enum SCP_CLIENT_STATES_E

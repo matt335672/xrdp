@@ -39,6 +39,4 @@
 #include "access.h"
 #include "scp.h"
 
-#include "libscp.h"
-
 #endif

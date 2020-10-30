@@ -29,6 +29,9 @@
 #endif
 
 #include "libscp_vX.h"
+#include "libscp_v0.h"
+#include "libscp_v1s_mng.h"
+#include "libscp_tcp.h"
 
 /* server API */
 enum SCP_SERVER_STATES_E scp_vXs_accept(struct SCP_CONNECTION *c, struct SCP_SESSION **s)
@@ -49,7 +52,7 @@ enum SCP_SERVER_STATES_E scp_vXs_accept(struct SCP_CONNECTION *c, struct SCP_SES
     }
     else if (version == 1)
     {
-        return scp_v1s_accept(c, s, 1);
+        return scp_v1s_mng_accept(c, s, 1);
     }
 
     return SCP_SERVER_STATE_VERSION_ERR;
