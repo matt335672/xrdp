@@ -145,6 +145,7 @@ int      g_free_library(long lib);
 void*    g_get_proc_address(long lib, const char* name);
 int      g_system(char* aexec);
 char*    g_get_strerror(void);
+char*    g_strerror(int e);
 int      g_get_errno(void);
 int      g_execvp(const char* p1, char* args[]);
 int      g_execlp3(const char* a1, const char* a2, const char* a3);
@@ -189,6 +190,14 @@ int      g_tcp4_socket(void);
 int      g_tcp4_bind_address(int sck, const char *port, const char *address);
 int      g_tcp6_socket(void);
 int      g_tcp6_bind_address(int sck, const char *port, const char *address);
+
+/**
+ * Creates a pair of linked stream sockets
+ *
+ * @param fds array to receive descriptors of sockets
+ * @return 0 for success, or -1 with errno set
+ */
+int g_stream_socketpair(int fds[2]);
 
 /* glib-style wrappers */
 #define g_new(struct_type, n_structs) \

@@ -29,10 +29,7 @@
 #define SESSION_H
 
 #include "libscp_types.h"
-
-#define SESMAN_SESSION_TYPE_XRDP      1
-#define SESMAN_SESSION_TYPE_XVNC      2
-#define SESMAN_SESSION_TYPE_XORG      3
+#include "session_leader_api.h"
 
 #define SESMAN_SESSION_STATUS_ACTIVE        0x01
 #define SESMAN_SESSION_STATUS_IDLE          0x02
@@ -60,7 +57,7 @@ struct session_date
 struct session_item
 {
   char name[256];
-  int pid; /* pid of sesman waiting for wm to end */
+  struct session_leader_t sl;
   int display;
   int width;
   int height;
@@ -82,7 +79,7 @@ struct session_item
 struct session_chain
 {
   struct session_chain* next;
-  struct session_item* item;
+  struct session_item item;
 };
 
 /**
@@ -105,10 +102,18 @@ session_get_bydata(const char *name, int width, int height, int bpp, int type,
  *
  */
 int
-session_start(long data, tui8 type, struct SCP_CONNECTION *c,
-              struct SCP_SESSION *s);
+session_start(struct SCP_CONNECTION *c, struct SCP_SESSION *s);
 
-int
+/**
+ *
+ * @brief Run a user script on reconnect
+ * @param display Display number
+ * @param username username
+ * @param data authentication data for user
+ * @return 0 on error, display number if success
+ *
+ */
+void
 session_reconnect(int display, char *username, long data);
 
 /**

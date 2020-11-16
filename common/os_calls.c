@@ -3090,6 +3090,18 @@ g_get_strerror(void)
 }
 
 /*****************************************************************************/
+/* does not work in win32 */
+char *
+g_strerror(int e)
+{
+#if defined(_WIN32)
+    return 0;
+#else
+    return strerror(e);
+#endif
+}
+
+/*****************************************************************************/
 int
 g_get_errno(void)
 {
@@ -4011,5 +4023,15 @@ g_tcp6_bind_address(int sck, const char *port, const char *address)
     return rv;
 #else
     return -1;
+#endif
+}
+
+/*****************************************************************************/
+int g_stream_socketpair(int fds[2])
+{
+#if defined(_WIN32)
+    return -1;
+#else
+    return socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 #endif
 }

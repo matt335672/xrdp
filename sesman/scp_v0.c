@@ -35,135 +35,142 @@
 
 extern struct config_sesman *g_cfg; /* in sesman.c */
 
+/**************************************************************************//**
+ * Handles a gateway request
+ *
+ * This is simply a request to authenticate the user
+ *
+ * @param c Connection info
+ * @param s Session info
+ */
+static void
+handle_gateway_request(struct SCP_CONNECTION *c, struct SCP_SESSION *s)
+{
+    int errorcode = 0;
+    tbus data = auth_userpass(s->username, s->password, &errorcode);
+
+    if (!data)
+    {
+        log_message(LOG_LEVEL_INFO, "Username or password error "
+                    "for user: %s", s->username);
+    }
+    else
+    {
+        if (1 == access_login_allowed(s->username))
+        {
+            /* the user is member of the correct groups. */
+            log_message(LOG_LEVEL_INFO, "Access permitted for user: %s",
+                        s->username);
+        }
+        else
+        {
+            errorcode = 32 + 3;
+            log_message(LOG_LEVEL_INFO, "Username okey but group problem "
+                        "for user: %s", s->username);
+        }
+        auth_end(data);
+    }
+
+    scp_v0s_replyauthentication(c, errorcode);
+}
+
+
+/**************************************************************************//**
+ * Handles a reconnection request
+ *
+ * @param c Connection info
+ * @param s Session info from client
+ * @param s_item Session info held by sesman
+ */
+static void
+handle_reconnection_request(struct SCP_CONNECTION *c, struct SCP_SESSION *s,
+                            struct session_item *s_item)
+{
+    int errorcode = 0;
+    tbus data = auth_userpass(s->username, s->password, &errorcode);
+    if (!data)
+    {
+        log_message(LOG_LEVEL_INFO, "Can't reconnect: Username or "
+                    "password error for user: %s", s->username);
+        scp_v0s_deny_connection(c);
+    }
+    else
+    {
+        if (0 != s->client_ip)
+        {
+            log_message( LOG_LEVEL_INFO, "++ reconnected session: "
+                         "username %s, display :%d.0, session_pid %d"
+                         ", ip %s",
+                         s->username, s_item->display, s_item->sl.pid,
+                         s->client_ip);
+        }
+        else
+        {
+            log_message(LOG_LEVEL_INFO, "++ reconnected session: "
+                        "username %s, display :%d.0, session_pid %d",
+                        s->username, s_item->display, s_item->sl.pid);
+        }
+
+        scp_v0s_allow_connection(c, s_item->display, s_item->guid);
+        /* Run a user script for the reconnection
+         *
+         * Ideally we would use s->data for this, but this would need
+         * a context switch to the subprocess for the session (TBA) */
+        session_reconnect(s->display, s->username, data);
+        auth_end(data);
+    }
+}
+
+
+/**************************************************************************//**
+ * Handles a new session request
+ *
+ * See session_start() for more information on why user authentication is not
+ * performed at this level.
+ *
+ * @param c Connection info
+ * @param s Session info
+ */
+static void
+handle_new_session_request(struct SCP_CONNECTION *c, struct SCP_SESSION *s)
+{
+    int display = 0;
+
+    display = session_start(c, s);
+    if (display == 0)
+    {
+        scp_v0s_deny_connection(c);
+    }
+    else
+    {
+        scp_v0s_allow_connection(c, display, s->guid);
+    }
+}
+
 /******************************************************************************/
 void
 scp_v0_process(struct SCP_CONNECTION *c, struct SCP_SESSION *s)
 {
-    int display = 0;
-    tbus data;
-    struct session_item *s_item;
-    int errorcode = 0;
-    bool_t do_auth_end = 1;
-
-    data = auth_userpass(s->username, s->password, &errorcode);
-
     if (s->type == SCP_GW_AUTHENTICATION)
     {
-        /* this is just authentication in a gateway situation */
         /* g_writeln("SCP_GW_AUTHENTICATION message received"); */
-        if (data)
-        {
-            if (1 == access_login_allowed(s->username))
-            {
-                /* the user is member of the correct groups. */
-                scp_v0s_replyauthentication(c, errorcode);
-                log_message(LOG_LEVEL_INFO, "Access permitted for user: %s",
-                            s->username);
-                /* g_writeln("Connection allowed"); */
-            }
-            else
-            {
-                scp_v0s_replyauthentication(c, 32 + 3); /* all first 32 are reserved for PAM errors */
-                log_message(LOG_LEVEL_INFO, "Username okey but group problem for "
-                            "user: %s", s->username);
-                /* g_writeln("user password ok, but group problem"); */
-            }
-        }
-        else
-        {
-            /* g_writeln("username or password error"); */
-            log_message(LOG_LEVEL_INFO, "Username or password error for user: %s",
-                        s->username);
-            scp_v0s_replyauthentication(c, errorcode);
-        }
+        handle_gateway_request(c, s);
     }
-    else if (data)
+    else
     {
+        /* See if there's already a session we can reconnect to */
+        struct session_item *s_item;
         s_item = session_get_bydata(s->username, s->width, s->height,
                                     s->bpp, s->type, s->client_ip);
 
         if (s_item != 0)
         {
-            display = s_item->display;
-            g_memcpy(s->guid, s_item->guid, 16);
-            if (0 != s->client_ip)
-            {
-                log_message( LOG_LEVEL_INFO, "++ reconnected session: username %s, "
-                             "display :%d.0, session_pid %d, ip %s",
-                             s->username, display, s_item->pid, s->client_ip);
-            }
-            else
-            {
-                log_message(LOG_LEVEL_INFO, "++ reconnected session: username %s, "
-                            "display :%d.0, session_pid %d", s->username, display,
-                            s_item->pid);
-            }
-
-            session_reconnect(display, s->username, data);
+            handle_reconnection_request(c, s, s_item);
         }
         else
         {
-            LOG_DEVEL(LOG_LEVEL_DEBUG, "pre auth");
-
-            if (1 == access_login_allowed(s->username))
-            {
-                tui8 guid[16];
-
-                g_random((char*)guid, 16);
-                scp_session_set_guid(s, guid);
-
-                if (0 != s->client_ip)
-                {
-                    log_message(LOG_LEVEL_INFO, "++ created session (access granted): "
-                                "username %s, ip %s", s->username, s->client_ip);
-                }
-                else
-                {
-                    log_message(LOG_LEVEL_INFO, "++ created session (access granted): "
-                                "username %s", s->username);
-                }
-
-                if (SCP_SESSION_TYPE_XVNC == s->type)
-                {
-                    log_message( LOG_LEVEL_INFO, "starting Xvnc session...");
-                    display = session_start(data, SESMAN_SESSION_TYPE_XVNC, c, s);
-                }
-                else if (SCP_SESSION_TYPE_XRDP == s->type)
-                {
-                    log_message(LOG_LEVEL_INFO, "starting X11rdp session...");
-                    display = session_start(data, SESMAN_SESSION_TYPE_XRDP, c, s);
-                }
-                else if (SCP_SESSION_TYPE_XORG == s->type)
-                {
-                    /* type is SCP_SESSION_TYPE_XORG */
-                    log_message(LOG_LEVEL_INFO, "starting Xorg session...");
-                    display = session_start(data, SESMAN_SESSION_TYPE_XORG, c, s);
-                }
-                /* if the session started up ok, auth_end will be called on
-                   sig child */
-                do_auth_end = display == 0;
-            }
-            else
-            {
-                display = 0;
-            }
+            /* This is a new session */
+            handle_new_session_request(c, s);
         }
-
-        if (display == 0)
-        {
-            scp_v0s_deny_connection(c);
-        }
-        else
-        {
-            scp_v0s_allow_connection(c, display, s->guid);
-        }
-    }
-    else
-    {
-        scp_v0s_deny_connection(c);
-    }
-    if (do_auth_end)
-    {
-        auth_end(data);
     }
 }
