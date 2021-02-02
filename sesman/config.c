@@ -33,6 +33,7 @@
 #include "file.h"
 #include "sesman.h"
 #include "log.h"
+#include "xrdp_sockets.h"
 #include "string_calls.h"
 
 /***************************************************************************//**
@@ -109,7 +110,8 @@ config_read_globals(int file, struct config_sesman *cf, struct list *param_n,
 
     if ('\0' == cf->listen_port[0])
     {
-        g_strncpy(cf->listen_port, "3350", 5);
+        g_strncpy(cf->listen_port, SCP_LISTEN_PORT_STR,
+                  sizeof(cf->listen_port) - 1);
     }
 
     if ('\0' == cf->user_wm[0])

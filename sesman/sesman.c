@@ -151,36 +151,44 @@ sesman_process_params(int argc, char **argv,
 }
 
 /******************************************************************************/
+static struct trans *
+create_listen_trans(const char *port)
+{
+    struct trans *t;
+    int mode = TRANS_MODE_TCP;
+
+    if (g_cfg->listen_port[0] == '/')
+    {
+        mode = TRANS_MODE_UNIX;
+    }
+    if ((t = trans_create(mode, 8192, 8192)) != NULL)
+    {
+        if (trans_listen_address(t, g_cfg->listen_port,
+                                 g_cfg->listen_address) != 0)
+        {
+            LOG(LOG_LEVEL_ERROR, "trans_listen_address failed [%s]",
+                g_get_strerror());
+            trans_delete(t);
+            t = NULL;
+        }
+    }
+
+    return t;
+}
+
+/******************************************************************************/
 static int sesman_listen_test(struct config_sesman *cfg)
 {
-    int error;
-    int sck;
+    struct trans *t;
     int rv = 0;
 
-    sck = g_tcp_socket();
-    if (sck < 0)
-    {
-        return 1;
-    }
 
     LOG(LOG_LEVEL_DEBUG, "Testing if xrdp-sesman can listen on %s port %s.",
         cfg->listen_address, cfg->listen_port);
-    g_tcp_set_non_blocking(sck);
-    error = scp_tcp_bind(sck, cfg->listen_address, cfg->listen_port);
-    if (error == 0)
+    if ((t = create_listen_trans(cfg->listen_port)) != NULL)
     {
-        /* try to listen */
-        error = g_tcp_listen(sck);
-
-        if (error == 0)
-        {
-            /* if listen succeeded, stop listen immediately */
-            g_sck_close(sck);
-        }
-        else
-        {
-            rv = 1;
-        }
+        /* if listen succeeded, stop listen immediately */
+        trans_delete(t);
     }
     else
     {
@@ -290,14 +298,10 @@ sesman_main_loop(void)
         log_message(LOG_LEVEL_ERROR, "sesman_main_loop: list_create failed");
         return 1;
     }
-    if (g_cfg->listen_port[0] == '/')
-    {
-        g_list_trans = trans_create(TRANS_MODE_UNIX, 8192, 8192);
-    }
-    else
-    {
-        g_list_trans = trans_create(TRANS_MODE_TCP, 8192, 8192);
-    }
+
+    LOG(LOG_LEVEL_DEBUG, "sesman_main_loop: listening on %s",
+        g_cfg->listen_port);
+    g_list_trans = create_listen_trans(g_cfg->listen_port);
     if (g_list_trans == NULL)
     {
         log_message(LOG_LEVEL_ERROR, "sesman_main_loop: trans_create failed");
@@ -305,18 +309,6 @@ sesman_main_loop(void)
         return 1;
     }
 
-    LOG(LOG_LEVEL_DEBUG, "sesman_main_loop: address %s port %s",
-                g_cfg->listen_address, g_cfg->listen_port);
-    error = trans_listen_address(g_list_trans, g_cfg->listen_port,
-                                 g_cfg->listen_address);
-    if (error != 0)
-    {
-        log_message(LOG_LEVEL_ERROR, "sesman_main_loop: trans_listen_address "
-                    "failed");
-        trans_delete(g_list_trans);
-        list_delete(g_con_list);
-        return 1;
-    }
     g_list_trans->trans_conn_in = sesman_listen_conn_in;
     cont = 1;
     while (cont)

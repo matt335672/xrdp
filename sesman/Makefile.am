@@ -8,6 +8,7 @@ AM_CPPFLAGS = \
   -DXRDP_SHARE_PATH=\"${datadir}/xrdp\" \
   -DXRDP_PID_PATH=\"${localstatedir}/run\" \
   -DXRDP_SOCKET_PATH=\"${socketdir}\" \
+  -DSESMAN_SOCKET_PATH=\"${sesmansocketdir}\" \
   -I$(top_srcdir)/common \
   -I$(top_srcdir)/sesman/libscp
 
@@ -76,7 +77,8 @@ xrdp_sesman_LDADD = \
 sesmansysconfdir=$(sysconfdir)/xrdp
 
 SUBST_VARS = sed \
-   -e 's|@sesmansysconfdir[@]|$(sesmansysconfdir)|g'
+   -e 's|@sesmansysconfdir[@]|$(sesmansysconfdir)|g' \
+   -e 's|@socketdir[@]|$(socketdir)|g'
 
 subst_verbose = $(subst_verbose_@AM_V@)
 subst_verbose_ = $(subst_verbose_@AM_DEFAULT_V@)

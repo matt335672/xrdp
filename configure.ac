@@ -48,9 +48,15 @@ AM_CONDITIONAL(MACOS, [test "x$macos" = xyes])
 
 AC_ARG_WITH([socketdir],
   [AS_HELP_STRING([--with-socketdir=DIR],
-                  [Use directory for UNIX sockets (default: /tmp/.xrdp)])],
+                  [Use directory for session UNIX sockets (default: /tmp/.xrdp)])],
                   [], [with_socketdir="/tmp/.xrdp"])
 AC_SUBST([socketdir], [$with_socketdir])
+
+AC_ARG_WITH([sesmansocketdir],
+  [AS_HELP_STRING([--with-sesmansocketdir=DIR],
+                  [Use directory for sesman UNIX sockets (default: /var/run/xrdp-sesman)])],
+                  [], [with_sesmansocketdir="/var/run/xrdp-sesman"])
+AC_SUBST([sesmansocketdir], [$with_sesmansocketdir])
 
 AC_ARG_WITH([systemdsystemunitdir],
         AS_HELP_STRING([--with-systemdsystemunitdir=DIR], [Directory for systemd service files, no to disable]),
