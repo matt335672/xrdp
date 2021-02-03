@@ -56,8 +56,8 @@ SUBDIRS = \
   libxrdp \
   $(PAINTERDIR) \
   $(RFXCODECDIR) \
-  xrdp \
   sesman \
+  xrdp \
   keygen \
   docs \
   instfiles \

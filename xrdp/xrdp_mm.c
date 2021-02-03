@@ -25,6 +25,8 @@
 #include "log.h"
 #include "string_calls.h"
 
+#include "libscp_connection.h"
+
 #ifdef USE_PAM
 #if defined(HAVE__PAM_TYPES_H)
 #define LINUXPAM 1
@@ -1624,14 +1626,11 @@ xrdp_mm_get_sesman_port(char *port, int port_bytes)
 {
     int fd;
     int index;
-    char *val;
-    char cfg_file[256];
+    char cfg_file[256] = {0};
     struct list *names;
     struct list *values;
 
-    g_memset(cfg_file, 0, sizeof(char) * 256);
-    /* default to port 3350 */
-    g_strncpy(port, "3350", port_bytes - 1);
+    port[0] = '\0';
     /* see if port is in sesman.ini file */
     g_snprintf(cfg_file, 255, "%s/sesman.ini", XRDP_CFG_PATH);
     fd = g_file_open(cfg_file);
@@ -1645,16 +1644,19 @@ xrdp_mm_get_sesman_port(char *port, int port_bytes)
 
         if (file_read_section(fd, "Globals", names, values) == 0)
         {
+            const char *param;
+            const char *val;
+
             for (index = 0; index < names->count; index++)
             {
-                val = (char *)list_get_item(names, index);
+                param = (const char *)list_get_item(names, index);
 
-                if (val != 0)
+                if (param != 0)
                 {
-                    if (g_strcasecmp(val, "ListenPort") == 0)
+                    if (g_strcasecmp(param, "ListenPort") == 0)
                     {
-                        val = (char *)list_get_item(values, index);
-                        g_strncpy(port, val, port_bytes - 1);
+                        val = (const char *)list_get_item(values, index);
+                        scp_port_to_unix_domain_path(val, port, port_bytes);
                         break;
                     }
                 }
@@ -1664,6 +1666,11 @@ xrdp_mm_get_sesman_port(char *port, int port_bytes)
         list_delete(names);
         list_delete(values);
         g_file_close(fd);
+    }
+
+    if (port[0] == '\0')
+    {
+        scp_port_to_unix_domain_path(NULL, port, port_bytes);
     }
 
     return 0;

@@ -136,7 +136,7 @@ int main(int argc, char **argv)
     }
 
     s = scp_session_create();
-    c = scp_connection_create(sock);
+    c = 0; /*scp_connection_create(sock); */
 
     LOG_DEVEL(LOG_LEVEL_DEBUG, "Connecting to %s:%s with user %s (%s)", serv, port, user, pass);
 
@@ -169,7 +169,7 @@ int main(int argc, char **argv)
 
     g_tcp_close(sock);
     scp_session_destroy(s);
-    scp_connection_destroy(c);
+    /* scp_connection_destroy(c); */
     log_end();
 
     return 0;

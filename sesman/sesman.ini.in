@@ -2,9 +2,7 @@
 
 [Globals]
 ; xrdp-sesman listening port.
-#ListenPort=@socketdir@/sesman/scp_socket
-; Address for the deprecated TCP listen mode of operation.
-#ListenAddress=
+#ListenPort=sesman.socket
 EnableUserWindowManager=true
 ; Give in relative path to user's home directory
 UserWindowManager=startwm.sh

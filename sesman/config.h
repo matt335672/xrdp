@@ -193,11 +193,6 @@ struct config_sesman
   char *sesman_ini;
 
   /**
-   * @var listen_address
-   * @brief Listening address
-   */
-  char listen_address[32];
-  /**
    * @var listen_port
    * @brief Listening port
    */

@@ -51,28 +51,18 @@ Following parameters can be used in the \fB[Globals]\fR section.
 
 .TP
 \fBListenPort\fR=\fIpath-to-socket\fR
-xrdp-sesman listening port.
+UNIX domain socket for xrdp-sesman(8) to listen on.
 .PP
 .RS
-Leaving this value unspecified is the recommended setting as it ensures
-the socket is properly secure. The default value is @sesmansocketdir@/scp.socket
-
+The default value of this setting is 'sesman.socket'.
 .PP
-If the ListenPort starts with a '/', a UNIX domain socket with the specified
-name is used. The system administrator is responsible for ensuring
-the socket can only be created by a suitably privileged process. If you must
-use this setting, a name within @sesmansocketdir@ is recommended.
+An absoute path can be specified by starting this parameter with a '/'.
+In this instance, the system administrator is responsible for ensuring
+the socket can only be created by a suitably privileged process.
 .PP
-If a numeric value is used, a TCP listening port is created. This is
-a deprecated mode of operation, maintained for backwards compatibility
-and is not recommended.
+If the parameter does not start with a '/', a name within
+@sesmanruntimedir@ is used.
 .RE
-
-.TP
-\fBListenAddress\fR=\fIip address\fR
-Address for the deprecated TCP listen mode of operation.
-Only used if \fBListenPort\fR is set to a numeric value.  If not
-specified, defaults to \fI0.0.0.0\fR (all interfaces).
 
 .TP
 \fBEnableUserWindowManager\fR=\fI[true|false]\fR

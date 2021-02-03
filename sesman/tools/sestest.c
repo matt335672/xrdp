@@ -62,7 +62,7 @@ int main(int argc, char **argv)
     }
 
     s = scp_session_create();
-    c = scp_connection_create(sock);
+    c = 0; /*scp_connection_create(sock);*/
 
     if (0 != g_tcp_connect(sock, "localhost", "3350"))
     {
@@ -175,7 +175,7 @@ int main(int argc, char **argv)
 
     g_tcp_close(sock);
     scp_session_destroy(s);
-    scp_connection_destroy(c);
+    /*scp_connection_destroy(c); */
     /*free_stream(c.in_s);
     free_stream(c.out_s);*/
 

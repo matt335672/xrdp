@@ -31,22 +31,16 @@
 
 /**
  *
- * @brief creates a new connection
- * @param sck the connection socket
+ * @brief Maps a port definition to a UNIX domain socket path
+ * @param port Port definition (e.g. from sesman.ini)
+ * @param buff Buffer for result
+ * @param bufflen Length of buff
  *
- * @return a struct SCP_CONNECTION* object on success, NULL otherwise
- *
- */
-struct SCP_CONNECTION*
-scp_connection_create(int sck);
-
-/**
- *
- * @brief destroys a struct SCP_CONNECTION* object
- * @param c the object to be destroyed
+ * @return Number of chars needed for result, excluding the '\0'
  *
  */
-void
-scp_connection_destroy(struct SCP_CONNECTION* c);
+int
+scp_port_to_unix_domain_path(const char *port, char *buff,
+                             unsigned int bufflen);
 
 #endif

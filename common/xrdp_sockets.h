@@ -28,7 +28,7 @@
 #define CHANSRV_API_BASE_STR       "xrdpapi_%d"
 #define XRDP_X11RDP_BASE_STR       "xrdp_display_%d"
 #define XRDP_DISCONNECT_BASE_STR   "xrdp_disconnect_display_%d"
-#define SCP_LISTEN_PORT_BASE_STR   "scp.socket"
+#define SCP_LISTEN_PORT_BASE_STR   "sesman.socket"
 
 /* fullpath of sockets */
 #define XRDP_CHANSRV_STR      XRDP_SOCKET_PATH "/" XRDP_CHANSRV_BASE_STR
@@ -37,6 +37,5 @@
 #define CHANSRV_API_STR       XRDP_SOCKET_PATH "/" CHANSRV_API_BASE_STR
 #define XRDP_X11RDP_STR       XRDP_SOCKET_PATH "/" XRDP_X11RDP_BASE_STR
 #define XRDP_DISCONNECT_STR   XRDP_SOCKET_PATH "/" XRDP_DISCONNECT_BASE_STR
-#define SCP_LISTEN_PORT_STR   SESMAN_SOCKET_PATH "/" SCP_LISTEN_PORT_BASE_STR
 
 #endif

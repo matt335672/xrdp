@@ -29,35 +29,26 @@
 #endif
 
 #include "libscp_connection.h"
+#include "string_calls.h"
+#include "xrdp_sockets.h"
 
-//extern struct log_config* s_log;
-
-struct SCP_CONNECTION *
-scp_connection_create(int sck)
+int
+scp_port_to_unix_domain_path(const char *port, char *buff,
+                             unsigned int bufflen)
 {
-    struct SCP_CONNECTION *conn;
-
-    conn = g_new(struct SCP_CONNECTION, 1);
-
-    if (0 == conn)
+    int result;
+    if (port[0] == '/')
     {
-        LOG(LOG_LEVEL_ERROR, "[connection:%d] connection create: malloc error", __LINE__);
-        return 0;
+        result = g_snprintf(buff, bufflen, "%s", port);
+    }
+    else
+    {
+        if (port[0] == '\0')
+        {
+            port = SCP_LISTEN_PORT_BASE_STR;
+        }
+        result = g_snprintf(buff, bufflen, SESMAN_RUNTIME_PATH "/%s", port);
     }
 
-    conn->in_sck = sck;
-    make_stream(conn->in_s);
-    init_stream(conn->in_s, 8196);
-    make_stream(conn->out_s);
-    init_stream(conn->out_s, 8196);
-
-    return conn;
-}
-
-void
-scp_connection_destroy(struct SCP_CONNECTION *c)
-{
-    free_stream(c->in_s);
-    free_stream(c->out_s);
-    g_free(c);
+    return result;
 }

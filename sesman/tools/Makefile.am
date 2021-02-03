@@ -4,7 +4,6 @@ AM_CPPFLAGS = \
   -DXRDP_SHARE_PATH=\"${datadir}/xrdp\" \
   -DXRDP_PID_PATH=\"${localstatedir}/run\" \
   -DXRDP_SOCKET_PATH=\"${socketdir}\" \
-  -DSESMAN_SOCKET_PATH=\"${sesmansocketdir}\" \
   -I$(top_srcdir)/common \
   -I$(top_srcdir)/sesman/libscp \
   -I$(top_srcdir)/sesman
@@ -43,7 +42,8 @@ xrdp_xcon_SOURCES = \
   xcon.c
 
 xrdp_sesrun_LDADD = \
-  $(top_builddir)/common/libcommon.la
+  $(top_builddir)/common/libcommon.la \
+  $(top_builddir)/sesman/libscp/libscp.la
 
 xrdp_sestest_LDADD = \
   $(top_builddir)/common/libcommon.la \

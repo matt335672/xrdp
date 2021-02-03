@@ -154,17 +154,11 @@ sesman_process_params(int argc, char **argv,
 static struct trans *
 create_listen_trans(const char *port)
 {
-    struct trans *t;
-    int mode = TRANS_MODE_TCP;
+    struct trans *t =  trans_create(TRANS_MODE_UNIX, 8192, 8192);
 
-    if (g_cfg->listen_port[0] == '/')
+    if (t != NULL)
     {
-        mode = TRANS_MODE_UNIX;
-    }
-    if ((t = trans_create(mode, 8192, 8192)) != NULL)
-    {
-        if (trans_listen_address(t, g_cfg->listen_port,
-                                 g_cfg->listen_address) != 0)
+        if (trans_listen_address(t, port, NULL) != 0)
         {
             LOG(LOG_LEVEL_ERROR, "trans_listen_address failed [%s]",
                 g_get_strerror());
@@ -183,8 +177,9 @@ static int sesman_listen_test(struct config_sesman *cfg)
     int rv = 0;
 
 
-    LOG(LOG_LEVEL_DEBUG, "Testing if xrdp-sesman can listen on %s port %s.",
-        cfg->listen_address, cfg->listen_port);
+    LOG(LOG_LEVEL_DEBUG,
+        "Testing if xrdp-sesman can listen on UNIX domain socket %s.",
+        cfg->listen_port);
     if ((t = create_listen_trans(cfg->listen_port)) != NULL)
     {
         /* if listen succeeded, stop listen immediately */
@@ -576,7 +571,6 @@ main(int argc, char **argv)
 
     LOG(LOG_LEVEL_TRACE, "config loaded in %s at %s:%d", __func__, __FILE__, __LINE__);
     LOG(LOG_LEVEL_TRACE, "    sesman_ini        = %s", g_cfg->sesman_ini);
-    LOG(LOG_LEVEL_TRACE, "    listen_address    = %s", g_cfg->listen_address);
     LOG(LOG_LEVEL_TRACE, "    listen_port       = %s", g_cfg->listen_port);
     LOG(LOG_LEVEL_TRACE, "    enable_user_wm    = %d", g_cfg->enable_user_wm);
     LOG(LOG_LEVEL_TRACE, "    default_wm        = %s", g_cfg->default_wm);
