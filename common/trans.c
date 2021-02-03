@@ -813,7 +813,7 @@ trans_connect(struct trans *self, const char *server, const char *port,
  * @return 0 on success, 1 on failure
  */
 int
-trans_listen_address(struct trans *self, char *port, const char *address)
+trans_listen_address(struct trans *self, const char *port, const char *address)
 {
     if (self->sck != 0)
     {
@@ -924,7 +924,7 @@ trans_listen_address(struct trans *self, char *port, const char *address)
 
 /*****************************************************************************/
 int
-trans_listen(struct trans *self, char *port)
+trans_listen(struct trans *self, const char *port)
 {
     return trans_listen_address(self, port, "0.0.0.0");
 }
