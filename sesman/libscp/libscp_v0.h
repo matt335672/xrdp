@@ -30,6 +30,30 @@
 #include "libscp.h"
 
 /* client API */
+
+struct scp_v0_reply_type
+{
+    /**
+     * True if this is a reply to a gateway authentication request
+     */
+    int is_gw_auth_response;
+
+    /**
+     * Authentication result. PAM code for gateway request, boolean otherwise
+     */
+    int auth_result;
+
+    /**
+     * Display number for successful non-gateway requests
+     */
+    int display;
+
+    /**
+     * GUID for successful non-gateway requests
+     */
+    tui8 guid[16];
+};
+
 /**
  *
  * @brief connects to sesman using scp v0
@@ -39,7 +63,28 @@
  *
  */
 enum SCP_CLIENT_STATES_E
-scp_v0c_connect(struct SCP_CONNECTION* c, struct SCP_SESSION* s);
+scp_v0c_gateway_request(struct trans *atrans,
+                             const char *username,
+                             const char *password);
+
+enum SCP_CLIENT_STATES_E
+scp_v0c_create_session_request(struct trans *atrans,
+                               const char *username,
+                               const char *password,
+                               unsigned short code,
+                               unsigned short width,
+                               unsigned short height,
+                               unsigned short bpp,
+                               const char *domain,
+                               const char *shell,
+                               const char *program,
+                               const char *client_ip);
+
+int
+scp_v0c_reply_available(struct trans *atrans);
+
+enum SCP_CLIENT_STATES_E
+scp_v0c_get_reply(struct trans *atrans, struct scp_v0_reply_type *reply);
 
 /* server API */
 /**

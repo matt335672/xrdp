@@ -31,6 +31,16 @@
 
 /**
  *
+ * @brief Maps SCP_CLIENT_TYPES_E to a string
+ * @param e
+ *
+ * @return Pointer to a string
+ *
+ */
+const char *scp_client_state_to_str(SCP_CLIENT_STATES_E e);
+
+/**
+ *
  * @brief Maps a port definition to a UNIX domain socket path
  * @param port Port definition (e.g. from sesman.ini)
  * @param buff Buffer for result

@@ -153,35 +153,168 @@ xrdp_mm_delete(struct xrdp_mm *self)
 }
 
 /*****************************************************************************/
+/* Send gateway login information to sesman */
+
+static int
+xrdp_mm_send_gateway_login(struct xrdp_mm *self, const char *username,
+                           const char *password)
+{
+    int rv = 0;
+    xrdp_wm_log_msg(self->wm, LOG_LEVEL_DEBUG,
+                    "sending login info to session manager, please wait...");
+
+    e = scp_v0c_gateway_request(self->sesman_trans, username, password);
+
+    if (e != SCP_CLIENT_STATE_OK)
+    {
+        xrdp_wm_log_msg(self->wm, LOG_LEVEL_WARNING,
+                        "Error sending gateway login request to sesman [%s]",
+                        scp_client_state_to_str(e));
+        rv = 1;
+    }
+#if 0
+static int
+access_control(char *username, char *password, char *srv)
+{
+    int reply;
+    int rec = 32+1; /* 32 is reserved for PAM failures this means connect failure */
+    struct stream *in_s;
+    struct stream *out_s;
+    unsigned long version;
+    unsigned short int dummy;
+    unsigned short int pAM_errorcode;
+    unsigned short int code;
+    unsigned long size;
+    int index;
+    int socket = g_tcp_socket();
+    char port[256];
+
+    if (socket != -1)
+    {
+        xrdp_mm_get_sesman_port(port, sizeof(port));
+        /* we use a blocking socket here */
+        reply = g_tcp_connect(socket, srv, port);
+
+        if (reply == 0)
+        {
+            make_stream(in_s);
+            init_stream(in_s, 500);
+            make_stream(out_s);
+            init_stream(out_s, 500);
+            s_push_layer(out_s, channel_hdr, 8);
+            out_uint16_be(out_s, 4); /*0x04 means SCP_GW_AUTHENTICATION*/
+            index = g_strlen(username);
+            out_uint16_be(out_s, index);
+            out_uint8a(out_s, username, index);
+
+            index = g_strlen(password);
+            out_uint16_be(out_s, index);
+            out_uint8a(out_s, password, index);
+            s_mark_end(out_s);
+            s_pop_layer(out_s, channel_hdr);
+            out_uint32_be(out_s, 0); /* version */
+            index = (int)(out_s->end - out_s->data);
+            out_uint32_be(out_s, index); /* size */
+            /* g_writeln("Number of data to send : %d",index); */
+            reply = g_tcp_send(socket, out_s->data, index, 0);
+            free_stream(out_s);
+
+            if (reply > 0)
+            {
+                /* We wait in 5 sec for a reply from sesman*/
+                if (g_sck_can_recv(socket, 5000))
+                {
+                    reply = g_tcp_recv(socket, in_s->end, 500, 0);
+
+                    if (reply > 0)
+                    {
+                        in_s->end =  in_s->end + reply;
+                        in_uint32_be(in_s, version);
+                        /*g_writeln("Version number in reply from sesman: %d",version) ; */
+                        in_uint32_be(in_s, size);
+
+                        if ((size == 14) && (version == 0))
+                        {
+                            in_uint16_be(in_s, code);
+                            in_uint16_be(in_s, pAM_errorcode); /* this variable holds the PAM error code if the variable is >32 it is a "invented" code */
+                            in_uint16_be(in_s, dummy);
+
+                            if (code != 4) /*0x04 means SCP_GW_AUTHENTICATION*/
+                            {
+                                log_message(LOG_LEVEL_ERROR, "Returned cmd code from "
+                                            "sesman is corrupt");
+                            }
+                            else
+                            {
+                                rec = pAM_errorcode; /* here we read the reply from the access control */
+                            }
+                        }
+                        else
+                        {
+                            log_message(LOG_LEVEL_ERROR, "Corrupt reply size or "
+                                        "version from sesman: %ld", size);
+                        }
+                    }
+                    else
+                    {
+                        log_message(LOG_LEVEL_ERROR, "No data received from sesman");
+                    }
+                }
+                else
+                {
+                    log_message(LOG_LEVEL_ERROR, "Timeout when waiting for sesman");
+                }
+            }
+            else
+            {
+                log_message(LOG_LEVEL_ERROR, "No success sending to sesman");
+            }
+
+            free_stream(in_s);
+            g_tcp_close(socket);
+        }
+        else
+        {
+            log_message(LOG_LEVEL_ERROR, "Failure connecting to socket sesman");
+        }
+    }
+    else
+    {
+        log_message(LOG_LEVEL_ERROR, "Failure creating socket - for access control");
+    }
+
+    if (socket != -1)
+        g_tcp_close(socket);
+
+    return rec;
+}
+#endif 
+
+    return rv;
+}
+
+/*****************************************************************************/
 /* Send login information to sesman */
-/* FIXME : This code duplicates functionality in the sesman tools sesrun.c.
- * When SCP is reworked, a common library function should be used */
 
 static int
 xrdp_mm_send_login(struct xrdp_mm *self)
 {
-    struct stream *s;
-    int rv;
+    int rv = 0;
     int index;
-    int count;
-    int xserverbpp;
-    char *username;
-    char *password;
-    char *name;
-    char *value;
+    int xserverbpp = 0;
+    const char *username = NULL;
+    const char *password = NULL;
+    const char *name;
+    const char *value;
 
     xrdp_wm_log_msg(self->wm, LOG_LEVEL_DEBUG,
                     "sending login info to session manager, please wait...");
-    username = 0;
-    password = 0;
     self->code = 0;
-    xserverbpp = 0;
-    count = self->login_names->count;
 
-    for (index = 0; index < count; index++)
+    for (index = 0; index < self->login_names->count; index++)
     {
-        name = (char *)list_get_item(self->login_names, index);
-        value = (char *)list_get_item(self->login_values, index);
+        name = (const char *)list_get_item(self->login_names, index);
+        value = (const char *)list_get_item(self->login_values, index);
 
         if (g_strcasecmp(name, "username") == 0)
         {
@@ -202,13 +335,45 @@ xrdp_mm_send_login(struct xrdp_mm *self)
         }
     }
 
-    if ((username == 0) || (password == 0))
+    if ((username == NULL) || (password == NULL))
     {
         xrdp_wm_log_msg(self->wm, LOG_LEVEL_ERROR,
                         "Error finding username and password");
         return 1;
     }
 
+    /* select and send X server bpp */
+    if (xserverbpp == 0)
+    {
+        if (self->code == 20)
+        {
+            xserverbpp = 24; /* xorgxrdp is always at 24 bpp */
+        }
+        else
+        {
+            xserverbpp = self->wm->screen->bpp; /* use client's bpp */
+        }
+    }
+    e = scp_v0c_create_session_request(self->sesman_trans,
+                                       username,
+                                       password,
+                                       code,
+                                       self->wm->screen->width,
+                                       self->wm->screen->height,
+                                       xserverbpp,
+                                       self->wm->client_info->domain,
+                                       self->wm->client_info->program,
+                                       self->wm->client_info->directory,
+                                       self->wm->client_info->client_ip);
+
+    if (e != SCP_CLIENT_STATE_OK)
+    {
+        xrdp_wm_log_msg(self->wm, LOG_LEVEL_WARNING,
+                        "Error sending create session to sesman [%s]",
+                        scp_client_state_to_str(e));
+        rv = 1;
+    }
+#if 0
     s = trans_get_out_s(self->sesman_trans, 8192);
     s_push_layer(s, channel_hdr, 8);
     /* this code is either 0 for Xvnc, 10 for X11rdp or 20 for Xorg */
@@ -223,18 +388,6 @@ xrdp_mm_send_login(struct xrdp_mm *self)
     out_uint16_be(s, self->wm->screen->width);
     out_uint16_be(s, self->wm->screen->height);
 
-    /* select and send X server bpp */
-    if (xserverbpp == 0)
-    {
-        if (self->code == 20)
-        {
-            xserverbpp = 24; /* xorgxrdp is always at 24 bpp */
-        }
-        else
-        {
-            xserverbpp = self->wm->screen->bpp; /* use client's bpp */
-        }
-    }
     out_uint16_be(s, xserverbpp);
 
     /* send domain */
@@ -274,12 +427,7 @@ xrdp_mm_send_login(struct xrdp_mm *self)
     out_uint32_be(s, index); /* size */
 
     rv = trans_force_write(self->sesman_trans);
-
-    if (rv != 0)
-    {
-        xrdp_wm_log_msg(self->wm, LOG_LEVEL_WARNING,
-                        "xrdp_mm_send_login: xrdp_mm_send_login failed");
-    }
+#endif 
 
     return rv;
 }
@@ -1782,123 +1930,6 @@ xrdp_mm_sesman_data_in(struct trans *trans)
 #ifdef USE_PAM
 /*********************************************************************/
 /* return 0 on success */
-static int
-access_control(char *username, char *password, char *srv)
-{
-    int reply;
-    int rec = 32 + 1; /* 32 is reserved for PAM failures this means connect failure */
-    struct stream *in_s;
-    struct stream *out_s;
-    unsigned long version;
-    unsigned short int dummy;
-    unsigned short int pAM_errorcode;
-    unsigned short int code;
-    unsigned long size;
-    int index;
-    int socket = g_tcp_socket();
-    char port[256];
-
-    if (socket != -1)
-    {
-        xrdp_mm_get_sesman_port(port, sizeof(port));
-        /* we use a blocking socket here */
-        reply = g_tcp_connect(socket, srv, port);
-
-        if (reply == 0)
-        {
-            make_stream(in_s);
-            init_stream(in_s, 500);
-            make_stream(out_s);
-            init_stream(out_s, 500);
-            s_push_layer(out_s, channel_hdr, 8);
-            out_uint16_be(out_s, 4); /*0x04 means SCP_GW_AUTHENTICATION*/
-            index = g_strlen(username);
-            out_uint16_be(out_s, index);
-            out_uint8a(out_s, username, index);
-
-            index = g_strlen(password);
-            out_uint16_be(out_s, index);
-            out_uint8a(out_s, password, index);
-            s_mark_end(out_s);
-            s_pop_layer(out_s, channel_hdr);
-            out_uint32_be(out_s, 0); /* version */
-            index = (int)(out_s->end - out_s->data);
-            out_uint32_be(out_s, index); /* size */
-            LOG(LOG_LEVEL_DEBUG, "Number of data to send : %d", index);
-            reply = g_tcp_send(socket, out_s->data, index, 0);
-            free_stream(out_s);
-
-            if (reply > 0)
-            {
-                /* We wait in 5 sec for a reply from sesman*/
-                if (g_sck_can_recv(socket, 5000))
-                {
-                    reply = g_tcp_recv(socket, in_s->end, 500, 0);
-
-                    if (reply > 0)
-                    {
-                        in_s->end =  in_s->end + reply;
-                        in_uint32_be(in_s, version);
-                        LOG(LOG_LEVEL_INFO, "Version number in reply from sesman: %lu", version);
-                        in_uint32_be(in_s, size);
-
-                        if ((size == 14) && (version == 0))
-                        {
-                            in_uint16_be(in_s, code);
-                            in_uint16_be(in_s, pAM_errorcode); /* this variable holds the PAM error code if the variable is >32 it is a "invented" code */
-                            in_uint16_be(in_s, dummy);
-
-                            if (code != 4) /*0x04 means SCP_GW_AUTHENTICATION*/
-                            {
-                                LOG(LOG_LEVEL_ERROR, "Returned cmd code from "
-                                    "sesman is corrupt");
-                            }
-                            else
-                            {
-                                rec = pAM_errorcode; /* here we read the reply from the access control */
-                            }
-                        }
-                        else
-                        {
-                            LOG(LOG_LEVEL_ERROR, "Corrupt reply size or "
-                                "version from sesman: %ld", size);
-                        }
-                    }
-                    else
-                    {
-                        LOG(LOG_LEVEL_ERROR, "No data received from sesman");
-                    }
-                }
-                else
-                {
-                    LOG(LOG_LEVEL_ERROR, "Timeout when waiting for sesman");
-                }
-            }
-            else
-            {
-                LOG(LOG_LEVEL_ERROR, "No success sending to sesman");
-            }
-
-            free_stream(in_s);
-            g_tcp_close(socket);
-        }
-        else
-        {
-            LOG(LOG_LEVEL_ERROR, "Failure connecting to socket sesman");
-        }
-    }
-    else
-    {
-        LOG(LOG_LEVEL_ERROR, "Failure creating socket - for access control");
-    }
-
-    if (socket != -1)
-    {
-        g_tcp_close(socket);
-    }
-
-    return rec;
-}
 #endif
 
 /*****************************************************************************/
@@ -2161,6 +2192,67 @@ getPAMAdditionalErrorInfo(const int pamError, struct xrdp_mm *self)
 #endif
 
 /*****************************************************************************/
+static int
+xrdp_mm_sesman_connect(struct xrdp_mm *self)
+{
+    self->sesman_trans_up = 0;
+    trans_delete(self->sesman_trans);
+
+    xrdp_mm_get_sesman_port(port, sizeof(port));
+    if (port[0] == '/')
+    {
+        self->sesman_trans = trans_create(TRANS_MODE_UNIX, 8192, 8192);
+    }
+    else
+    {
+        self->sesman_trans = trans_create(TRANS_MODE_TCP, 8192, 8192);
+    }
+    self->sesman_trans->is_term = g_is_term;
+    xrdp_wm_log_msg(self->wm, LOG_LEVEL_DEBUG,
+                    "connecting to sesman ip %s port %s", ip, port);
+    /* xrdp_mm_sesman_data_in is the callback that is called when data arrives */
+    self->sesman_trans->trans_data_in = xrdp_mm_sesman_data_in;
+    self->sesman_trans->header_size = 8;
+    self->sesman_trans->callback_data = self;
+
+    /* try to connect up to 4 times */
+    for (index = 0; index < 4; index++)
+    {
+        if (trans_connect(self->sesman_trans, ip, port, 3000) == 0)
+        {
+            self->sesman_trans_up = 1;
+            break;
+        }
+        if (g_is_term())
+        {
+            break;
+        }
+        g_sleep(1000);
+        g_writeln("xrdp_mm_connect: connect failed "
+                  "trying again...");
+    }
+
+    if (self->sesman_trans_up)
+    {
+        /* fully connect */
+        xrdp_wm_log_msg(self->wm, LOG_LEVEL_INFO, "sesman connect ok");
+        self->connected_state = 1;
+    }
+    else
+    {
+        xrdp_wm_log_msg(self->wm, LOG_LEVEL_ERROR,
+                        "Error connecting to sesman: %s port: %s",
+                        ip, port);
+        trans_delete(self->sesman_trans);
+        self->sesman_trans = 0;
+        self->sesman_trans_up = 0;
+    }
+
+    return (self->sesman_trans_up == 0);
+}
+
+
+/*****************************************************************************/
 int
 xrdp_mm_connect(struct xrdp_mm *self)
 {
@@ -2176,11 +2268,13 @@ xrdp_mm_connect(struct xrdp_mm *self)
     char port[256];
     char chansrvport[256];
 #ifdef USE_PAM
-    int use_pam_auth = 0;
-    char pam_auth_sessionIP[256];
-    char pam_auth_password[256];
-    char pam_auth_username[256];
+    int use_gateway = 0;
+#else
+    const int use_gateway = 0;
 #endif
+    char gateway_sessionIP[256];
+    const char *gateway_password;
+    const char *gateway_username;
     char username[256];
     char password[256];
     username[0] = 0;
@@ -2213,21 +2307,21 @@ xrdp_mm_connect(struct xrdp_mm *self)
             }
         }
 
-#ifdef USE_PAM
         else if (g_strcasecmp(name, "pamusername") == 0)
         {
-            use_pam_auth = 1;
-            g_strncpy(pam_auth_username, value, 255);
+#ifdef USE_PAM
+            use_gateway = 1;
+#endif
+            gateway_username = value;
         }
         else if (g_strcasecmp(name, "pamsessionmng") == 0)
         {
-            g_strncpy(pam_auth_sessionIP, value, 255);
+            g_strncpy(gateway_sessionIP, value, 255);
         }
         else if (g_strcasecmp(name, "pampassword") == 0)
         {
-            g_strncpy(pam_auth_password, value, 255);
+            gateway_password = value;
         }
-#endif
         else if (g_strcasecmp(name, "password") == 0)
         {
             g_strncpy(password, value, 255);
@@ -2243,30 +2337,48 @@ xrdp_mm_connect(struct xrdp_mm *self)
         }
     }
 
-#ifdef USE_PAM
-    if (use_pam_auth)
+    if (use_gateway)
     {
-        int reply;
-        char pam_error[128];
-        const char *additionalError;
-        xrdp_wm_log_msg(self->wm, LOG_LEVEL_DEBUG,
-                        "Please wait, we now perform access control...");
-
-        LOG(LOG_LEVEL_DEBUG, "we use pam modules to check if we can approve this user");
-        if (!g_strncmp(pam_auth_username, "same", 255))
+        if (!g_strcmp(gateway_username, "same"))
         {
-            LOG(LOG_LEVEL_DEBUG, "pamusername copied from username - same: %s", username);
-            g_strncpy(pam_auth_username, username, 255);
+            gateway_username = username;
         }
 
-        if (!g_strncmp(pam_auth_password, "same", 255))
+        if (!g_strncmp(gateway_password, "same", 255))
         {
-            LOG(LOG_LEVEL_DEBUG, "pam_auth_password copied from username - same: %s", password);
-            g_strncpy(pam_auth_password, password, 255);
+            gateway_password = password;
+        }
+
+        xrdp_wm_log_msg(self->wm, LOG_LEVEL_INFO,
+                        "Performing access control for %s", gateway_username);
+
+        if (xrdp_mm_sesman_connect(self) != 0)
+        {
+            rv = 1;
+        }
+        else
+        {
+            rv = xrdp_mm_send_gateway_login(self, gateway_username,
+                                            gateway_password);
+        }
+
+zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz 
+
+        LOG(LOG_LEVEL_DEBUG, "we use pam modules to check if we can approve this user");
+        if (!g_strncmp(gateway_username, "same", 255))
+        {
+            LOG(LOG_LEVEL_DEBUG, "pamusername copied from username - same: %s", username);
+            g_strncpy(gateway_username, username, 255);
+        }
+
+        if (!g_strncmp(gateway_password, "same", 255))
+        {
+            LOG(LOG_LEVEL_DEBUG, "gateway_password copied from username - same: %s", password);
+            g_strncpy(gateway_password, password, 255);
         }
 
         /* access_control return 0 on success */
-        reply = access_control(pam_auth_username, pam_auth_password, pam_auth_sessionIP);
+        reply = access_control(gateway_username, gateway_password, gateway_sessionIP);
 
         xrdp_wm_log_msg(self->wm, LOG_LEVEL_INFO,
                         "Reply from access control: %s",
@@ -2288,60 +2400,7 @@ xrdp_mm_connect(struct xrdp_mm *self)
 
     if (self->sesman_controlled)
     {
-        ok = 0;
-        trans_delete(self->sesman_trans);
-        xrdp_mm_get_sesman_port(port, sizeof(port));
-        if (port[0] == '/')
-        {
-            self->sesman_trans = trans_create(TRANS_MODE_UNIX, 8192, 8192);
-        }
-        else
-        {
-            self->sesman_trans = trans_create(TRANS_MODE_TCP, 8192, 8192);
-        }
-        self->sesman_trans->is_term = g_is_term;
-        xrdp_wm_log_msg(self->wm, LOG_LEVEL_DEBUG,
-                        "connecting to sesman ip %s port %s", ip, port);
-        /* xrdp_mm_sesman_data_in is the callback that is called when data arrives */
-        self->sesman_trans->trans_data_in = xrdp_mm_sesman_data_in;
-        self->sesman_trans->header_size = 8;
-        self->sesman_trans->callback_data = self;
-
-        /* try to connect up to 4 times */
-        for (index = 0; index < 4; index++)
-        {
-            if (trans_connect(self->sesman_trans, ip, port, 3000) == 0)
-            {
-                self->sesman_trans_up = 1;
-                ok = 1;
-                break;
-            }
-            if (g_is_term())
-            {
-                break;
-            }
-            g_sleep(1000);
-            LOG(LOG_LEVEL_INFO, "xrdp_mm_connect: connect failed "
-                "trying again...");
-        }
-
-        if (ok)
-        {
-            /* fully connect */
-            xrdp_wm_log_msg(self->wm, LOG_LEVEL_INFO, "sesman connect ok");
-            self->connected_state = 1;
-            rv = xrdp_mm_send_login(self);
-        }
-        else
-        {
-            xrdp_wm_log_msg(self->wm, LOG_LEVEL_ERROR,
-                            "Error connecting to sesman: %s port: %s",
-                            ip, port);
-            trans_delete(self->sesman_trans);
-            self->sesman_trans = 0;
-            self->sesman_trans_up = 0;
-            rv = 1;
-        }
+        rv = xrdp_mm_send_login(self);
     }
     else /* no sesman */
     {
