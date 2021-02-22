@@ -433,39 +433,40 @@ xrdp_mm_send_login(struct xrdp_mm *self)
 }
 
 /*****************************************************************************/
-/* returns error */
-/* this goes through the login_names looking for one called 'aname'
-   then it copies the corresponding login_values item into 'dest'
-   'dest' must be at least 'dest_len' + 1 bytes in size */
-static int
-xrdp_mm_get_value(struct xrdp_mm *self, const char *aname, char *dest,
-                  int dest_len)
+/**
+ * Looks for a value in the login_names/login_values array
+ *
+ * In the event of multiple matches, the LAST value matched is returned
+ *
+ * Returned strings are valid until the module is destroyed.
+ *
+ * @param self This module
+ * @param aname Name to lookup (case-insensitive)
+ *
+ * @return pointer to value, or NULL if not found.
+ */
+static const char *
+xrdp_mm_get_value(struct xrdp_mm *self, const char *aname)
 {
-    char *name;
-    char *value;
+    const char *name;
+    const char *value;
     int index;
-    int count;
-    int rv;
+    const char *rv = NULL;
 
-    rv = 1;
     /* find the library name */
-    dest[0] = 0;
-    count = self->login_names->count;
-
-    for (index = 0; index < count; index++)
+    for (index = 0; index < self->login_names->count; index++)
     {
-        name = (char *)list_get_item(self->login_names, index);
-        value = (char *)list_get_item(self->login_values, index);
+        name = (const char *)list_get_item(self->login_names, index);
+        value = (const char *)list_get_item(self->login_values, index);
 
-        if ((name == 0) || (value == 0))
+        if ((name == NULL) || (value == NULL))
         {
             break;
         }
 
         if (g_strcasecmp(name, aname) == 0)
         {
-            g_strncpy(dest, value, dest_len);
-            rv = 0;
+            rv = value;
         }
     }
 
@@ -477,7 +478,7 @@ static int
 xrdp_mm_setup_mod1(struct xrdp_mm *self)
 {
     void *func;
-    char lib[256];
+    const char *lib;
     char text[256];
 
     if (self == 0)
@@ -487,7 +488,7 @@ xrdp_mm_setup_mod1(struct xrdp_mm *self)
 
     lib[0] = 0;
 
-    if (xrdp_mm_get_value(self, "lib", lib, 255) != 0)
+    if ((lib = xrdp_mm_get_value(self, "lib")) == NULL)
     {
         xrdp_wm_log_msg(self->wm, LOG_LEVEL_ERROR,
                         "no library name specified in xrdp.ini, please add "
@@ -667,9 +668,9 @@ xrdp_mm_setup_mod2(struct xrdp_mm *self, tui8 *guid)
             {
                 use_uds = 1;
 
-                if (xrdp_mm_get_value(self, "ip", text, 255) == 0)
+                if ((value = xrdp_mm_get_value(self, "ip")) != NULL)
                 {
-                    if (g_strcmp(text, "127.0.0.1") != 0)
+                    if (g_strcmp(value, "127.0.0.1") != 0)
                     {
                         use_uds = 0;
                     }
@@ -1711,7 +1712,7 @@ xrdp_mm_process_login_response(struct xrdp_mm *self, struct stream *s)
     int ok;
     int display;
     int rv;
-    char ip[256];
+    const char *ip;
     char port[256];
     tui8 guid[16];
     tui8 *pguid;
@@ -1735,12 +1736,13 @@ xrdp_mm_process_login_response(struct xrdp_mm *self, struct stream *s)
         {
             if (xrdp_mm_setup_mod2(self, pguid) == 0)
             {
-                xrdp_mm_get_value(self, "ip", ip, 255);
+                ip = xrdp_mm_get_value(self, "ip");
                 xrdp_wm_set_login_state(self->wm, WMLS_CLEANUP);
                 self->wm->dragging = 0;
 
                 /* connect channel redir */
-                if ((g_strcmp(ip, "127.0.0.1") == 0) || (ip[0] == 0))
+                if (ip == NULL || (ip[0] == '\0') ||
+                    (g_strcmp(ip, "127.0.0.1") == 0))
                 {
                     g_snprintf(port, 255, XRDP_CHANSRV_STR, display);
                 }
@@ -2256,29 +2258,15 @@ xrdp_mm_sesman_connect(struct xrdp_mm *self)
 int
 xrdp_mm_connect(struct xrdp_mm *self)
 {
-    struct list *names;
-    struct list *values;
-    int index;
-    int count;
     int ok;
     int rv;
     char *name;
     char *value;
-    char ip[256];
-    char port[256];
-    char chansrvport[256];
-#ifdef USE_PAM
-    int use_gateway = 0;
-#else
-    const int use_gateway = 0;
-#endif
-    char gateway_sessionIP[256];
-    const char *gateway_password;
-    const char *gateway_username;
-    char username[256];
-    char password[256];
-    username[0] = 0;
-    password[0] = 0;
+    const char *ip = NULL;
+    const char *port = NULL;
+    const char *chansrvport = NULL;
+    const char *username = NULL;
+    const char *password = NULL;
 
     /* make sure we start in correct state */
     cleanup_states(self);
@@ -2286,81 +2274,55 @@ xrdp_mm_connect(struct xrdp_mm *self)
     g_memset(port, 0, sizeof(port));
     g_memset(chansrvport, 0, sizeof(chansrvport));
     rv = 0; /* success */
-    names = self->login_names;
-    values = self->login_values;
-    count = names->count;
 
-    for (index = 0; index < count; index++)
+    ip = xrdp_mm_get_value(self, "ip");
+    port = xrdp_mm_get_value(self, "port");
+    if (g_strcasecmp(value, "-1") == 0)
     {
-        name = (char *)list_get_item(names, index);
-        value = (char *)list_get_item(values, index);
-
-        if (g_strcasecmp(name, "ip") == 0)
-        {
-            g_strncpy(ip, value, 255);
-        }
-        else if (g_strcasecmp(name, "port") == 0)
-        {
-            if (g_strcasecmp(value, "-1") == 0)
-            {
-                self->sesman_controlled = 1;
-            }
-        }
-
-        else if (g_strcasecmp(name, "pamusername") == 0)
-        {
-#ifdef USE_PAM
-            use_gateway = 1;
-#endif
-            gateway_username = value;
-        }
-        else if (g_strcasecmp(name, "pamsessionmng") == 0)
-        {
-            g_strncpy(gateway_sessionIP, value, 255);
-        }
-        else if (g_strcasecmp(name, "pampassword") == 0)
-        {
-            gateway_password = value;
-        }
-        else if (g_strcasecmp(name, "password") == 0)
-        {
-            g_strncpy(password, value, 255);
-        }
-        else if (g_strcasecmp(name, "username") == 0)
-        {
-            g_strncpy(username, value, 255);
-        }
-        else if (g_strcasecmp(name, "chansrvport") == 0)
-        {
-            g_strncpy(chansrvport, value, 255);
-            self->usechansrv = 1;
-        }
+        self->sesman_controlled = 1;
     }
 
-    if (use_gateway)
+    password = xrdp_mm_get_value(self, "password");
+    username = xrdp_mm_get_value(self, "username");
+    chansrvport = xrdp_mm_get_value(self, "chansrvport");
+    if (chansrvport != NULL)
     {
-        if (!g_strcmp(gateway_username, "same"))
-        {
-            gateway_username = username;
-        }
+        self->usechansrv = 1;
+    }
 
-        if (!g_strncmp(gateway_password, "same", 255))
-        {
-            gateway_password = password;
-        }
+zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz  - check username / password specified
+#ifdef USE_PAM
+    {
+        const char *gateway_username = xrdp_mm_get_value(self, "pamusername");
+        const char *gateway_password = xrdp_mm_get_value(self, "pampassword");
 
-        xrdp_wm_log_msg(self->wm, LOG_LEVEL_INFO,
+        if (gateway_username != NULL)
+        {
+            if (!g_strcmp(gateway_username, "same"))
+            {
+                gateway_username = username;
+            }
+
+            if (gateway_password == NULL ||
+                !g_strcmp(gateway_password, "same"))
+            {
+                gateway_password = password;
+                xrdp_wm_log_msg(self->wm, LOG_LEVEL_INFO,
+                                "Gateway password is same as main password");
+            }
+
+            xrdp_wm_log_msg(self->wm, LOG_LEVEL_INFO,
                         "Performing access control for %s", gateway_username);
 
-        if (xrdp_mm_sesman_connect(self) != 0)
-        {
-            rv = 1;
-        }
-        else
-        {
-            rv = xrdp_mm_send_gateway_login(self, gateway_username,
-                                            gateway_password);
-        }
+            if (xrdp_mm_sesman_connect(self) != 0)
+            {
+                rv = 1;
+            }
+            else
+            {
+                rv = xrdp_mm_send_gateway_login(self, gateway_username,
+                                                gateway_password);
+            }
 
 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz 
 
