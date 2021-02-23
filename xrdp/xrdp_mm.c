@@ -154,7 +154,6 @@ xrdp_mm_delete(struct xrdp_mm *self)
 
 /*****************************************************************************/
 /* Send gateway login information to sesman */
-
 static int
 xrdp_mm_send_gateway_login(struct xrdp_mm *self, const char *username,
                            const char *password)
@@ -295,83 +294,58 @@ access_control(char *username, char *password, char *srv)
 
 /*****************************************************************************/
 /* Send login information to sesman */
-
 static int
 xrdp_mm_send_login(struct xrdp_mm *self)
 {
     int rv = 0;
-    int index;
-    int xserverbpp = 0;
-    const char *username = NULL;
-    const char *password = NULL;
-    const char *name;
-    const char *value;
+    int xserverbpp;
+    const char *username;
+    const char *password;
 
-    xrdp_wm_log_msg(self->wm, LOG_LEVEL_DEBUG,
-                    "sending login info to session manager, please wait...");
-    self->code = 0;
+    username = xrdp_mm_get_value(self, "username");
+    password = xrdp_mm_get_value(self, "password");
+    /* this code is either 0 for Xvnc, 10 for X11rdp or 20 for Xorg */
+    self->code = xrdp_mm_get_value_int(self, "code", 0);
 
-    for (index = 0; index < self->login_names->count; index++)
+    if (self->code == 20)
     {
-        name = (const char *)list_get_item(self->login_names, index);
-        value = (const char *)list_get_item(self->login_values, index);
-
-        if (g_strcasecmp(name, "username") == 0)
-        {
-            username = value;
-        }
-        else if (g_strcasecmp(name, "password") == 0)
-        {
-            password = value;
-        }
-        else if (g_strcasecmp(name, "code") == 0)
-        {
-            /* this code is either 0 for Xvnc, 10 for X11rdp or 20 for Xorg */
-            self->code = g_atoi(value);
-        }
-        else if (g_strcasecmp(name, "xserverbpp") == 0)
-        {
-            xserverbpp = g_atoi(value);
-        }
+        xserverbpp = 24; /* xorgxrdp is always at 24 bpp */
+    }
+    else
+    {
+        xserverbpp = xrdp_mm_get_value_int(self, "xserverbpp",
+                                           self->wm->screen->bpp);
     }
 
     if ((username == NULL) || (password == NULL))
     {
         xrdp_wm_log_msg(self->wm, LOG_LEVEL_ERROR,
                         "Error finding username and password");
-        return 1;
-    }
-
-    /* select and send X server bpp */
-    if (xserverbpp == 0)
-    {
-        if (self->code == 20)
-        {
-            xserverbpp = 24; /* xorgxrdp is always at 24 bpp */
-        }
-        else
-        {
-            xserverbpp = self->wm->screen->bpp; /* use client's bpp */
-        }
-    }
-    e = scp_v0c_create_session_request(self->sesman_trans,
-                                       username,
-                                       password,
-                                       code,
-                                       self->wm->screen->width,
-                                       self->wm->screen->height,
-                                       xserverbpp,
-                                       self->wm->client_info->domain,
-                                       self->wm->client_info->program,
-                                       self->wm->client_info->directory,
-                                       self->wm->client_info->client_ip);
-
-    if (e != SCP_CLIENT_STATE_OK)
-    {
-        xrdp_wm_log_msg(self->wm, LOG_LEVEL_WARNING,
-                        "Error sending create session to sesman [%s]",
-                        scp_client_state_to_str(e));
         rv = 1;
+    }
+    else
+    {
+        xrdp_wm_log_msg(self->wm, LOG_LEVEL_DEBUG,
+                    "sending login info to session manager, please wait...");
+        e = scp_v0c_create_session_request(self->sesman_trans,
+                                           username,
+                                           password,
+                                           code,
+                                           self->wm->screen->width,
+                                           self->wm->screen->height,
+                                           xserverbpp,
+                                           self->wm->client_info->domain,
+                                           self->wm->client_info->program,
+                                           self->wm->client_info->directory,
+                                           self->wm->client_info->client_ip);
+
+        if (e != SCP_CLIENT_STATE_OK)
+        {
+            xrdp_wm_log_msg(self->wm, LOG_LEVEL_WARNING,
+                            "Error sending create session to sesman [%s]",
+                            scp_client_state_to_str(e));
+            rv = 1;
+        }
     }
 #if 0
     s = trans_get_out_s(self->sesman_trans, 8192);
@@ -471,6 +445,27 @@ xrdp_mm_get_value(struct xrdp_mm *self, const char *aname)
     }
 
     return rv;
+}
+
+
+/*****************************************************************************/
+/**
+ * Looks for an integer in the login_names/login_values array
+ *
+ * In the event of multiple matches, the LAST value matched is returned
+ *
+ * @param self This module
+ * @param aname Name to lookup (case-insensitive)
+ * @param def Default value to return if nothing is found
+ *
+ * @return integer value
+ */
+static const char *
+xrdp_mm_get_value_int(struct xrdp_mm *self, const char *aname, int def)
+{
+    const char *val = xrdp_mm_get_value(self, aname);
+
+    return (val == NULL) ? def : g_atoi(val);
 }
 
 /*****************************************************************************/
@@ -2259,7 +2254,7 @@ int
 xrdp_mm_connect(struct xrdp_mm *self)
 {
     int ok;
-    int rv;
+    int rv = 0;
     char *name;
     char *value;
     const char *ip = NULL;
@@ -2267,13 +2262,13 @@ xrdp_mm_connect(struct xrdp_mm *self)
     const char *chansrvport = NULL;
     const char *username = NULL;
     const char *password = NULL;
+#ifdef USE_PAM
+    const char *gateway_username;
+    const char *gateway_password;
+#endif
 
     /* make sure we start in correct state */
     cleanup_states(self);
-    g_memset(ip, 0, sizeof(ip));
-    g_memset(port, 0, sizeof(port));
-    g_memset(chansrvport, 0, sizeof(chansrvport));
-    rv = 0; /* success */
 
     ip = xrdp_mm_get_value(self, "ip");
     port = xrdp_mm_get_value(self, "port");
@@ -2282,63 +2277,52 @@ xrdp_mm_connect(struct xrdp_mm *self)
         self->sesman_controlled = 1;
     }
 
-    password = xrdp_mm_get_value(self, "password");
     username = xrdp_mm_get_value(self, "username");
+    password = xrdp_mm_get_value(self, "password");
     chansrvport = xrdp_mm_get_value(self, "chansrvport");
     if (chansrvport != NULL)
     {
         self->usechansrv = 1;
     }
 
-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz  - check username / password specified
-#ifdef USE_PAM
+    if (username == NULL || password == NULL )
     {
-        const char *gateway_username = xrdp_mm_get_value(self, "pamusername");
-        const char *gateway_password = xrdp_mm_get_value(self, "pampassword");
-
-        if (gateway_username != NULL)
+        /* TODO: Make sure the log window appears! */
+        xrdp_wm_log_msg(self->wm, LOG_LEVEL_ERROR,
+                        "Username and/or password missing!");
+        rv = 1;
+    }
+    else
+#ifdef USE_PAM
+    if ((gateway_username = xrdp_mm_get_value(self, "pamusername")) != NULL)
+    {
+        if (!g_strcmp(gateway_username, "same"))
         {
-            if (!g_strcmp(gateway_username, "same"))
-            {
-                gateway_username = username;
-            }
+            gateway_username = username;
+        }
 
-            if (gateway_password == NULL ||
-                !g_strcmp(gateway_password, "same"))
-            {
-                gateway_password = password;
-                xrdp_wm_log_msg(self->wm, LOG_LEVEL_INFO,
-                                "Gateway password is same as main password");
-            }
+        gateway_password = xrdp_mm_get_value(self, "pampassword");
 
+        if (gateway_password == NULL ||
+            !g_strcmp(gateway_password, "same"))
+        {
+            gateway_password = password;
             xrdp_wm_log_msg(self->wm, LOG_LEVEL_INFO,
-                        "Performing access control for %s", gateway_username);
-
-            if (xrdp_mm_sesman_connect(self) != 0)
-            {
-                rv = 1;
-            }
-            else
-            {
-                rv = xrdp_mm_send_gateway_login(self, gateway_username,
-                                                gateway_password);
-            }
-
-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz 
-
-        LOG(LOG_LEVEL_DEBUG, "we use pam modules to check if we can approve this user");
-        if (!g_strncmp(gateway_username, "same", 255))
-        {
-            LOG(LOG_LEVEL_DEBUG, "pamusername copied from username - same: %s", username);
-            g_strncpy(gateway_username, username, 255);
+                            "Gateway password is same as main password");
         }
 
-        if (!g_strncmp(gateway_password, "same", 255))
-        {
-            LOG(LOG_LEVEL_DEBUG, "gateway_password copied from username - same: %s", password);
-            g_strncpy(gateway_password, password, 255);
-        }
+        xrdp_wm_log_msg(self->wm, LOG_LEVEL_INFO,
+                    "Performing access control for %s", gateway_username);
 
+        if (xrdp_mm_sesman_connect(self) != 0)
+        {
+            rv = 1;
+        }
+        else
+        {
+            rv = xrdp_mm_send_gateway_login(self, gateway_username,
+                                            gateway_password);
+#if 0
         /* access_control return 0 on success */
         reply = access_control(gateway_username, gateway_password, gateway_sessionIP);
 
@@ -2357,13 +2341,25 @@ zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz
             rv = 1;
             return rv;
         }
-    }
 #endif
-
+        }
+    }
+    else
+#endif
     if (self->sesman_controlled)
     {
-        rv = xrdp_mm_send_login(self);
+        if (xrdp_mm_sesman_connect(self) != 0)
+        {
+            rv = 1;
+        }
+        else
+        {
+            rv = xrdp_mm_send_login(self);
+        }
     }
+
+    zzzzzzzzzzzzzzzzzz - split this off into a spearate function
+
     else /* no sesman */
     {
         if (xrdp_mm_setup_mod1(self) == 0)
