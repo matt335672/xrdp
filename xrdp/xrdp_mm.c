@@ -1874,11 +1874,20 @@ xrdp_mm_process_channel_data(struct xrdp_mm *self, tbus param1, tbus param2,
 }
 
 /*****************************************************************************/
+static int
+xrdp_mm_sesman_process_msg(struct xrdp_mm *self,
+                           const struct scp_v0_reply_type *msg)
+{
+    zzzzzzzzzzzzzzzzz - fill this in!
+}
+
+
+/*****************************************************************************/
 /* This is the callback registered for sesman communication replies. */
 static int
 xrdp_mm_sesman_data_in(struct trans *trans)
 {
-    struct xrdp_mm *self;
+    int rv = 1;
     struct stream *s;
     int version;
     int size;
@@ -1887,10 +1896,33 @@ xrdp_mm_sesman_data_in(struct trans *trans)
 
     if (trans == 0)
     {
-        return 1;
+        rv = 1;
+    }
+    else if (!scp_v0c_reply_available(trans))
+    {
+        rv = 0;
+    }
+    else
+    {
+        struct scp_v0_reply_type reply;
+        struct xrdp_mm *self = (struct xrdp_mm *)(trans->callback_data);
+        enum SCP_CLIENT_STATES_E e = scp_v0c_get_reply(trans, &reply);
+        if (e != SCP_CLIENT_STATE_OK)
+        {
+            xrdp_wm_log_msg(self->wm, LOG_LEVEL_ERROR,
+                        "Error reading response from sesman [%s]",
+                        scp_client_state_to_str(e));
+            rv = 1;
+        }
+        else
+        {
+            rv = xrdp_mm_sesman_process_msg(self, &reply);
+        }
     }
 
-    self = (struct xrdp_mm *)(trans->callback_data);
+    return rv;
+}
+#if 0
     s = trans_get_in_s(trans);
 
     if (s == 0)
@@ -1923,6 +1955,7 @@ xrdp_mm_sesman_data_in(struct trans *trans)
 
     return error;
 }
+#endif
 
 #ifdef USE_PAM
 /*********************************************************************/
@@ -2248,6 +2281,62 @@ xrdp_mm_sesman_connect(struct xrdp_mm *self)
     return (self->sesman_trans_up == 0);
 }
 
+/*****************************************************************************/
+static int
+xrdp_mm_connect_to_user_session(struct xrdp_mm *self, tui8 *giud)
+{
+    int rv = 0;
+
+    if (xrdp_mm_setup_mod1(self) != 0)
+    {
+        LOG(LOG_LEVEL_ERROR, "Failure setting up module");
+        xrdp_wm_set_login_state(self->wm, WMLS_INACTIVE);
+        xrdp_mm_module_cleanup(self);
+        rv = 1;
+    }
+    else if (xrdp_mm_setup_mod2(self, guid) != 0)
+    {
+        /* connect error */
+        xrdp_wm_log_msg(self->wm, LOG_LEVEL_ERROR,
+                        "Error connecting to: %s", ip);
+        xrdp_wm_set_login_state(self->wm, WMLS_INACTIVE);
+        xrdp_mm_module_cleanup(self);
+        rv = 1; /* failure */
+    }
+    else
+    {
+        xrdp_wm_set_login_state(self->wm, WMLS_CLEANUP);
+        self->wm->dragging = 0;
+        if (self->sesman_controlled)
+        {
+            char port[256];
+            const char *ip = xrdp_mm_get_value(self, "ip");
+
+            /* connect channel redir */
+            if (ip == NULL || (ip[0] == '\0') ||
+                (g_strcmp(ip, "127.0.0.1") == 0))
+            {
+                g_snprintf(port, 255, XRDP_CHANSRV_STR, display);
+            }
+            else
+            {
+                g_snprintf(port, 255, "%d", 7200 + display);
+            }
+            xrdp_mm_update_allowed_channels(self);
+            xrdp_mm_connect_chansrv(self, ip, port);
+        }
+        else if (self->usechansrv != 0)
+        {
+            const char *chansrvport = xrdp_mm_get_value(self, "chansrvport");
+            xrdp_mm_update_allowed_channels(self);
+            xrdp_mm_connect_chansrv(self, "", chansrvport);
+        }
+    }
+
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "return value from " __func__ " %d", rv);
+
+    return rv;
+}
 
 /*****************************************************************************/
 int
@@ -2357,47 +2446,12 @@ xrdp_mm_connect(struct xrdp_mm *self)
             rv = xrdp_mm_send_login(self);
         }
     }
-
-    zzzzzzzzzzzzzzzzzz - split this off into a spearate function
-
     else /* no sesman */
     {
-        if (xrdp_mm_setup_mod1(self) == 0)
-        {
-            if (xrdp_mm_setup_mod2(self, 0) == 0)
-            {
-                xrdp_wm_set_login_state(self->wm, WMLS_CLEANUP);
-                rv = 0; /*success*/
-            }
-            else
-            {
-                /* connect error */
-                xrdp_wm_log_msg(self->wm, LOG_LEVEL_ERROR,
-                                "Error connecting to: %s", ip);
-                rv = 1; /* failure */
-            }
-        }
-        else
-        {
-            LOG(LOG_LEVEL_ERROR, "Failure setting up module");
-        }
-
-        if (self->wm->login_state != WMLS_CLEANUP)
-        {
-            xrdp_wm_set_login_state(self->wm, WMLS_INACTIVE);
-            xrdp_mm_module_cleanup(self);
-            rv = 1; /* failure */
-        }
+        rv = xrdp_mm_connect_to_user_session(self, NULL);
     }
 
-    if ((self->wm->login_state == WMLS_CLEANUP) && (self->sesman_controlled == 0) &&
-            (self->usechansrv != 0))
-    {
-        /* if sesman controlled, this will connect later */
-        xrdp_mm_connect_chansrv(self, "", chansrvport);
-    }
-
-    LOG(LOG_LEVEL_DEBUG, "return value from xrdp_mm_connect %d", rv);
+    LOG(LOG_LEVEL_DEBUG, "return value from " __func__ " %d", rv);
 
     return rv;
 }
