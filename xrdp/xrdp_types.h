@@ -278,9 +278,19 @@ struct xrdp_cache
 /* defined later */
 struct xrdp_enc_data;
 
+enum mm_connect_state
+{
+    MMCS_GATEWAY_AUTH,
+    MMCS_SESSION_AUTH,
+    MMCS_CONNECT_TO_SESSION,
+    MMCS_CONNECT_TO_CHANSRV,
+    MMCS_DONE
+};
+
 struct xrdp_mm
 {
     struct xrdp_wm *wm; /* owner */
+    enum mm_connect_state connect_state; /* State of connection */
     int connected_state; /* true if connected to sesman else false */
     struct trans *sesman_trans; /* connection to sesman */
     int sesman_trans_up; /* true once connected to sesman */

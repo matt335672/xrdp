@@ -1972,6 +1972,7 @@ cleanup_states(struct xrdp_mm *self)
     if (self != NULL)
     {
         self-> connected_state = 0; /* true if connected to sesman else false */
+        self->connect_state = MMCS_GATEWAY_AUTH;
         self-> sesman_trans = NULL; /* connection to sesman */
         self-> sesman_trans_up = 0; /* true once connected to sesman */
         self-> delete_sesman_trans = 0; /* boolean set when done with sesman connection */
@@ -2307,30 +2308,6 @@ xrdp_mm_connect_to_user_session(struct xrdp_mm *self, tui8 *giud)
     {
         xrdp_wm_set_login_state(self->wm, WMLS_CLEANUP);
         self->wm->dragging = 0;
-        if (self->sesman_controlled)
-        {
-            char port[256];
-            const char *ip = xrdp_mm_get_value(self, "ip");
-
-            /* connect channel redir */
-            if (ip == NULL || (ip[0] == '\0') ||
-                (g_strcmp(ip, "127.0.0.1") == 0))
-            {
-                g_snprintf(port, 255, XRDP_CHANSRV_STR, display);
-            }
-            else
-            {
-                g_snprintf(port, 255, "%d", 7200 + display);
-            }
-            xrdp_mm_update_allowed_channels(self);
-            xrdp_mm_connect_chansrv(self, ip, port);
-        }
-        else if (self->usechansrv != 0)
-        {
-            const char *chansrvport = xrdp_mm_get_value(self, "chansrvport");
-            xrdp_mm_update_allowed_channels(self);
-            xrdp_mm_connect_chansrv(self, "", chansrvport);
-        }
     }
 
     LOG_DEVEL(LOG_LEVEL_DEBUG, "return value from " __func__ " %d", rv);
@@ -2340,47 +2317,19 @@ xrdp_mm_connect_to_user_session(struct xrdp_mm *self, tui8 *giud)
 
 /*****************************************************************************/
 /**
- * Initialise the connect sequence
+ * Initialise and start the connect sequence
  *
  * @param self This object
  */
 int
-xrdp_mm_init_connect(struct xrdp_mm *self)
+xrdp_mm_connect(struct xrdp_mm *self)
 {
-
-    zzzz - this is a copy of xrdp_mm_connect(). Mover init code to herem and
-    make xrdp_mm_connect() a state machine.
-    int ok;
     int rv = 0;
-    char *name;
-    char *value;
-    const char *ip = NULL;
-    const char *port = NULL;
-    const char *chansrvport = NULL;
-    const char *username = NULL;
-    const char *password = NULL;
-#ifdef USE_PAM
-    const char *gateway_username;
-    const char *gateway_password;
-#endif
+    const char *username = xrdp_mm_get_value("username");
+    const char *password = xrdp_mm_get_value("password");
 
     /* make sure we start in correct state */
     cleanup_states(self);
-
-    ip = xrdp_mm_get_value(self, "ip");
-    port = xrdp_mm_get_value(self, "port");
-    if (g_strcasecmp(value, "-1") == 0)
-    {
-        self->sesman_controlled = 1;
-    }
-
-    username = xrdp_mm_get_value(self, "username");
-    password = xrdp_mm_get_value(self, "password");
-    chansrvport = xrdp_mm_get_value(self, "chansrvport");
-    if (chansrvport != NULL)
-    {
-        self->usechansrv = 1;
-    }
 
     if (username == NULL || password == NULL )
     {
@@ -2390,153 +2339,185 @@ xrdp_mm_init_connect(struct xrdp_mm *self)
         rv = 1;
     }
     else
+    {
+        /* Look at our module parameters to decide if we need to connect
+         * to sesman or not */
+        const char *port = xrdp_mm_get_value(self, "port");
+        const char *gateway_username = xrdp_mm_get_value("pamusername");
+        int use_gateway = 0;
+
+        if (port != NULL && g_strcmp(value, "-1") == 0)
+        {
+            self->sesman_controlled = 1;
+        }
+
+        if (gateway_username != NULL)
+        {
 #ifdef USE_PAM
-    if ((gateway_username = xrdp_mm_get_value(self, "pamusername")) != NULL)
-    {
-        if (!g_strcmp(gateway_username, "same"))
-        {
-            gateway_username = username;
+            use_gateway = 1;
+#else
+            xrdp_wm_log_msg(self->wm, LOG_LEVEL_WARNING,
+                            "pamusername parameter ignored - "
+                            "xrdp is compiled with PAM support");
+#endif
         }
 
-        gateway_password = xrdp_mm_get_value(self, "pampassword");
-
-        if (gateway_password == NULL ||
-            !g_strcmp(gateway_password, "same"))
+        /* Will we need chansrv ? We use it unconditionally for a
+         * sesman session, but the user can also request it separately */
+        if (self->sesman_controlled ||
+            xrdp_mm_get_value(self, "chansrvport") != NULL)
         {
-            gateway_password = password;
-            xrdp_wm_log_msg(self->wm, LOG_LEVEL_INFO,
-                            "Gateway password is same as main password");
+            self->usechansrv = 1;
         }
 
-        xrdp_wm_log_msg(self->wm, LOG_LEVEL_INFO,
-                    "Performing access control for %s", gateway_username);
-
-        if (xrdp_mm_sesman_connect(self) != 0)
+        /* Connect to sesman if we need to use it */
+        if (self->sesman_controlled || use_gateway)
         {
-            rv = 1;
+            if ((rv = xrdp_mm_sesman_connect(self)) == 0)
+            {
+                /* Set the appropriate initial state for the state machine */
+                self->connect_state =
+                    (use_gateway) ? MMCS_GATEWAY_AUTH : MMCS_SESSION_AUTH;
+            }
         }
         else
         {
-            rv = xrdp_mm_send_gateway_login(self, gateway_username,
-                                            gateway_password);
-#if 0
-        /* access_control return 0 on success */
-        reply = access_control(gateway_username, gateway_password, gateway_sessionIP);
-
-        xrdp_wm_log_msg(self->wm, LOG_LEVEL_INFO,
-                        "Reply from access control: %s",
-                        getPAMError(reply, pam_error, 127));
-
-        additionalError = getPAMAdditionalErrorInfo(reply, self);
-        if (additionalError && additionalError[0])
-        {
-            xrdp_wm_log_msg(self->wm, LOG_LEVEL_INFO, "%s", additionalError);
+            /* Set the appropriate initial state for the state machine */
+            self->connect_state = MMCS_CONNECT_TO_SESSION;
         }
 
-        if (reply != 0)
+        /* Call the state machine to move to the next state */
+        if (rv == 0)
         {
-            rv = 1;
-            return rv;
-        }
-#endif
-        }
-    }
-    else
-#endif
-    if (self->sesman_controlled)
-    {
-        if (xrdp_mm_sesman_connect(self) != 0)
-        {
-            rv = 1;
+            rv = xrdp_mm_connect_sm(self);
         }
         else
         {
-            rv = xrdp_mm_send_login(self);
+            self->connect_state = MMCS_DONE;
         }
     }
-    else /* no sesman */
-    {
-        rv = xrdp_mm_connect_to_user_session(self, NULL);
-    }
-
-    LOG(LOG_LEVEL_DEBUG, "return value from " __func__ " %d", rv);
 
     return rv;
 }
 
 /*****************************************************************************/
 int
-xrdp_mm_connect(struct xrdp_mm *self)
+xrdp_mm_connect_sm(struct xrdp_mm *self)
 {
-    int ok;
     int rv = 0;
-    char *name;
-    char *value;
-    const char *ip = NULL;
-    const char *port = NULL;
-    const char *chansrvport = NULL;
-    const char *username = NULL;
-    const char *password = NULL;
-#ifdef USE_PAM
-    const char *gateway_username;
-    const char *gateway_password;
-#endif
 
-    /* make sure we start in correct state */
-    cleanup_states(self);
-
-    ip = xrdp_mm_get_value(self, "ip");
-    port = xrdp_mm_get_value(self, "port");
-    if (g_strcasecmp(value, "-1") == 0)
+    /* state machine loop - use 'continue' to process next state */
+    do
     {
-        self->sesman_controlled = 1;
-    }
-
-    username = xrdp_mm_get_value(self, "username");
-    password = xrdp_mm_get_value(self, "password");
-    chansrvport = xrdp_mm_get_value(self, "chansrvport");
-    if (chansrvport != NULL)
-    {
-        self->usechansrv = 1;
-    }
-
-    if (username == NULL || password == NULL )
-    {
-        /* TODO: Make sure the log window appears! */
-        xrdp_wm_log_msg(self->wm, LOG_LEVEL_ERROR,
-                        "Username and/or password missing!");
-        rv = 1;
-    }
-    else
-#ifdef USE_PAM
-    if ((gateway_username = xrdp_mm_get_value(self, "pamusername")) != NULL)
-    {
-        if (!g_strcmp(gateway_username, "same"))
+        switch (self->connect_state)
         {
-            gateway_username = username;
+            case MMCS_GATEWAY_AUTH:
+            {
+                const char *gateway_username;
+                const char *gateway_password;
+
+                gateway_username = xrdp_mm_get_value(self, "pamusername");
+                gateway_password = xrdp_mm_get_value(self, "pampassword");
+                if (!g_strcmp(gateway_username, "same"))
+                {
+                    gateway_username = xrdp_mm_get_value(self, "username");
+                }
+
+                if (gateway_password == NULL ||
+                    !g_strcmp(gateway_password, "same"))
+                {
+                    gateway_password = xrdp_mm_get_value(self, "password");
+                    xrdp_wm_log_msg(self->wm, LOG_LEVEL_INFO,
+                                    "Gateway password is same as main password");
+                }
+
+                xrdp_wm_log_msg(self->wm, LOG_LEVEL_INFO,
+                                "Performing access control for %s",
+                                gateway_username);
+
+                rv = xrdp_mm_send_gateway_login(self, gateway_username,
+                                                gateway_password);
+            }
+            break;
+
+            case MMCS_SESSION_AUTH:
+            {
+                if (self->sesman_controlled)
+                {
+                    rv = xrdp_mm_send_login(self);
+                }
+                else
+                {
+                    /* Skip auth and move to next sm state */
+                    self->connect_state = MMCS_CONNECT_TO_SESSION;
+                    continue;
+                }
+            }
+            break;
+
+            case MMCS_CONNECT_TO_SESSION:
+            {
+                rv = xrdp_mm_connect_to_user_session(self, NULL);
+                if (rv == 0)
+                {
+                    self->connected_state = MMCS_CONNECT_TO_CHANSRV;
+                    continue;
+                }
+            }
+            break;
+
+            case MMCS_CONNECT_TO_CHANSRV:
+            {
+                if (self->usechansrv)
+                {
+                    const char *port = "";
+                    const char *ip = "";
+
+                    if (self->sesman_controlled)
+                    {
+                        char portbuff[256];
+                        ip = xrdp_mm_get_value(self, "ip");
+
+                        /* connect channel redir */
+                        if (ip == NULL || (ip[0] == '\0') ||
+                            (g_strcmp(ip, "127.0.0.1") == 0))
+                        {
+                            g_snprintf(portbuff, sizeof(portbuff),
+                                       XRDP_CHANSRV_STR, display);
+                        }
+                        else
+                        {
+                            g_snprintf(portbuff, sizeof(portbuff),
+                                       "%d", 7200 + display);
+                        }
+                        port = portbuff;
+                        xrdp_mm_update_allowed_channels(self);
+                        xrdp_mm_connect_chansrv(self, ip, port);
+                    }
+                    else
+                    {
+                        port = xrdp_mm_get_value(self, "chansrvport");
+                    }
+                    xrdp_mm_update_allowed_channels(self);
+                    xrdp_mm_connect_chansrv(self, ip, port);
+                }
+                self->connected_state = MMCS_DONE;
+            }
+            break;
+
+            case MMCS_DONE:
+            {
+                LOG(LOG_LEVEL_ERROR, __func__ " state machine error");
+                rv = 1;
+            }
+            break;
         }
+    } while (0);
 
-        gateway_password = xrdp_mm_get_value(self, "pampassword");
+    LOG(LOG_LEVEL_DEBUG, "return value from " __func__ " %d", rv);
 
-        if (gateway_password == NULL ||
-            !g_strcmp(gateway_password, "same"))
-        {
-            gateway_password = password;
-            xrdp_wm_log_msg(self->wm, LOG_LEVEL_INFO,
-                            "Gateway password is same as main password");
-        }
-
-        xrdp_wm_log_msg(self->wm, LOG_LEVEL_INFO,
-                    "Performing access control for %s", gateway_username);
-
-        if (xrdp_mm_sesman_connect(self) != 0)
-        {
-            rv = 1;
-        }
-        else
-        {
-            rv = xrdp_mm_send_gateway_login(self, gateway_username,
-                                            gateway_password);
+    return rv;
+}
 #if 0
         /* access_control return 0 on success */
         reply = access_control(gateway_username, gateway_password, gateway_sessionIP);
@@ -2557,30 +2538,6 @@ xrdp_mm_connect(struct xrdp_mm *self)
             return rv;
         }
 #endif
-        }
-    }
-    else
-#endif
-    if (self->sesman_controlled)
-    {
-        if (xrdp_mm_sesman_connect(self) != 0)
-        {
-            rv = 1;
-        }
-        else
-        {
-            rv = xrdp_mm_send_login(self);
-        }
-    }
-    else /* no sesman */
-    {
-        rv = xrdp_mm_connect_to_user_session(self, NULL);
-    }
-
-    LOG(LOG_LEVEL_DEBUG, "return value from " __func__ " %d", rv);
-
-    return rv;
-}
 
 /*****************************************************************************/
 int
