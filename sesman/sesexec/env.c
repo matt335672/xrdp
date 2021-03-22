@@ -156,6 +156,7 @@ env_set_user(int uid, char **passwd_file, int display,
              * xorgxrdp and the pulseaudio plugin */
             g_snprintf(text, sizeof(text), XRDP_SOCKET_PATH, uid);
             g_setenv("XRDP_SOCKET_PATH", text, 1);
+            // env variable used by PCSC to get remote smartcard reader socket
             g_snprintf(text, sizeof(text), XRDP_PCSC_STR, uid, display);
             g_setenv("PCSCLITE_CSOCK_NAME", text, 1);
             /* pulse sink socket */
