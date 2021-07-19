@@ -112,6 +112,7 @@ struct pcsc_uds_client
     int waiting;
     int something_changed;
     int send_status;
+    int version;
 };
 
 static struct list *g_uds_clients = 0; /* struct pcsc_uds_client */
@@ -1465,7 +1466,7 @@ int
 scard_process_control(struct trans *con, struct stream *in_s)
 {
     struct pcsc_control_struct pcscCtl;
-    char* sentBuffer;
+    char *sentBuffer;
     int rv;
     struct stream *out_s;
 
@@ -1485,7 +1486,7 @@ scard_process_control(struct trans *con, struct stream *in_s)
     out_uint8a(out_s, &pcscCtl, sizeof(pcscCtl));
     s_mark_end(out_s);
     rv = trans_write_copy(con);
-    
+
     g_free(sentBuffer);
     return rv;
 }
@@ -1726,8 +1727,8 @@ static int
 scard_process_cmd_version(struct trans *con, struct stream *in_s)
 {
     int rv;
-    int major;
-    int minor;
+    int major = 0;
+    int minor = 0;
     struct pcsc_uds_client *uds_client;
     void *user_data;
 
@@ -1735,10 +1736,10 @@ scard_process_cmd_version(struct trans *con, struct stream *in_s)
     rv = 0;
     in_uint32_le(in_s, major);
     in_uint32_le(in_s, minor);
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_version: major %d minor %d", major, minor);
+    LOG_DEVEL(LOG_LEVEL_INFO, "scard_process_version: major %d minor %d", major, minor);
     uds_client = (struct pcsc_uds_client *) (con->callback_data);
     uds_client->state = 1;
-    uds_client = (struct pcsc_uds_client *) (con->callback_data);
+    uds_client->version = major * 1000 + minor;
     user_data = (void *) (tintptr) (uds_client->uds_client_id);
     uds_client->ref_count++;
     scard_send_establish_context(user_data, 0); /* SCARD_SCOPE_USER */
@@ -1774,18 +1775,33 @@ scard_process_cmd_wait_reader_state_change(struct trans *con,
         struct stream *in_s)
 {
     int rv;
-    //struct stream *out_s;
-    int timeOut;
+    int timeOut __attribute__((unused));
+    int reader_state_bytes;
+    struct stream *out_s;
     struct pcsc_uds_client *uds_client;
 
     LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_cmd_wait_reader_state_change:");
-    in_uint32_le(in_s, timeOut);
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_cmd_wait_reader_state_change: timeOut %d",
-              timeOut);
-    //out_s = con->out_s;
     uds_client = (struct pcsc_uds_client *) (con->callback_data);
     uds_client->waiting = 1;
-    rv = 0;
+    if (uds_client->version > 4002)
+    {
+        //In these versions, return reader states immediately
+        out_s = con->out_s;
+        reader_state_bytes = sizeof(uds_client->readerStates);
+        init_stream(out_s, reader_state_bytes);
+        out_uint8a(out_s, uds_client->readerStates, reader_state_bytes);
+        s_mark_end(out_s);
+        rv = trans_write_copy(con);
+    }
+    else
+    {
+        in_uint32_le(in_s, timeOut);
+        LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_cmd_wait_reader_state_change: timeOut %d",
+                  timeOut);
+        in_uint32_le(in_s, rv);
+        LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_cmd_wait_reader_state_change: rv %d", rv);
+    }
+
     return rv;
 }
 
