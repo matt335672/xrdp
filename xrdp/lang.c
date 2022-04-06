@@ -258,7 +258,7 @@ get_keymaps(int keylayout, struct xrdp_keymap *keymap)
 
     if (g_file_exist(filename))
     {
-        fd = g_file_open(filename);
+        fd = g_file_open_ro(filename);
         LOG(LOG_LEVEL_INFO, "Loading keymap file %s", filename);
 
         if (fd != -1)

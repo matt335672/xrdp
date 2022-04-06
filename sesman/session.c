@@ -33,18 +33,10 @@
 #include "config_ac.h"
 #endif
 
-#ifdef HAVE_SYS_PRCTL_H
-#include <sys/prctl.h>
-#endif
-
 #include "sesman.h"
 #include "xauth.h"
 #include "xrdp_sockets.h"
 #include "string_calls.h"
-
-#ifndef PR_SET_NO_NEW_PRIVS
-#define PR_SET_NO_NEW_PRIVS 38
-#endif
 
 static struct session_chain *g_sessions;
 static int g_session_count;
@@ -693,6 +685,19 @@ session_start(long data,
             }
             else if (display_pid == 0) /* child */
             {
+                /*
+                 * Make sure the X server doesn't run setuid root. Root access
+                 * is not needed. Xorg can fail when run as root and the user
+                 * has no console permissions.
+                 */
+                if (g_set_no_new_privs(1) != 0)
+                {
+                    LOG(LOG_LEVEL_WARNING,
+                        "[session start] (display %d): Failed to disable "
+                        "setuid on X server: %s",
+                        display, g_get_strerror());
+                }
+
                 if (s->type == SCP_SESSION_TYPE_XVNC)
                 {
                     env_set_user(s->username,
@@ -744,22 +749,6 @@ session_start(long data,
 
                 if (s->type == SCP_SESSION_TYPE_XORG)
                 {
-#ifdef HAVE_SYS_PRCTL_H
-                    /*
-                     * Make sure Xorg doesn't run setuid root. Root access is not
-                     * needed. Xorg can fail when run as root and the user has no
-                     * console permissions.
-                     * PR_SET_NO_NEW_PRIVS requires Linux kernel 3.5 and newer.
-                     */
-                    if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0)
-                    {
-                        LOG(LOG_LEVEL_WARNING,
-                            "[session start] (display %d): Failed to disable "
-                            "setuid on X server: %s",
-                            display, g_get_strerror());
-                    }
-#endif
-
                     xserver_params = list_create();
                     xserver_params->auto_free = 1;
 

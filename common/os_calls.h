@@ -122,6 +122,7 @@ int      g_memcmp(const void *s1, const void *s2, int len);
 int      g_file_open(const char *file_name);
 int      g_file_open_ex(const char *file_name, int aread, int awrite,
                         int acreate, int atrunc);
+int      g_file_open_ro(const char *file_name);
 int      g_file_close(int fd);
 int      g_file_read(int fd, char *ptr, int len);
 int      g_file_write(int fd, const char *ptr, int len);
@@ -193,6 +194,7 @@ int      g_tcp4_socket(void);
 int      g_tcp4_bind_address(int sck, const char *port, const char *address);
 int      g_tcp6_socket(void);
 int      g_tcp6_bind_address(int sck, const char *port, const char *address);
+int      g_set_no_new_privs(int only_if_unconfined);
 
 /* glib-style wrappers */
 #define g_new(struct_type, n_structs) \

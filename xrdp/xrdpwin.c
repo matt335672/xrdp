@@ -459,7 +459,7 @@ main(int argc, char **argv)
 
             if (g_file_exist(pid_file)) /* xrdp.pid */
             {
-                fd = g_file_open(pid_file); /* xrdp.pid */
+                fd = g_file_open_ro(pid_file); /* xrdp.pid */
             }
 
             if (fd == -1)

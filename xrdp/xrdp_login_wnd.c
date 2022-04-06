@@ -573,7 +573,7 @@ xrdp_wm_login_fill_in_combo(struct xrdp_wm *self, struct xrdp_bitmap *b)
     section_names->auto_free = 1;
     section_values = list_create();
     section_values->auto_free = 1;
-    fd = g_file_open(xrdp_ini);
+    fd = g_file_open_ro(xrdp_ini);
 
     if (fd < 0)
     {
@@ -971,7 +971,7 @@ load_xrdp_config(struct xrdp_config *config, const char *xrdp_ini, int bpp)
     globals->ls_btn_cancel_height = 30;
 
     /* open xrdp.ini file */
-    if ((fd = g_file_open(xrdp_ini)) < 0)
+    if ((fd = g_file_open_ro(xrdp_ini)) < 0)
     {
         LOG(LOG_LEVEL_ERROR, "load_config: Could not read "
             "xrdp.ini file %s", xrdp_ini);

@@ -52,6 +52,9 @@
 #include <sys/stat.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
+#if defined(HAVE_SYS_PRCTL_H)
+#include <sys/prctl.h>
+#endif
 #include <dlfcn.h>
 #include <arpa/inet.h>
 #include <netdb.h>
@@ -2219,6 +2222,14 @@ g_file_open_ex(const char *file_name, int aread, int awrite,
 }
 
 /*****************************************************************************/
+/* returns -1 on error, else return handle or file descriptor */
+int
+g_file_open_ro(const char *file_name)
+{
+    return g_file_open_ex(file_name, 1, 0, 0, 0);
+}
+
+/*****************************************************************************/
 /* returns error, always 0 */
 int
 g_file_close(int fd)
@@ -3730,5 +3741,39 @@ g_tcp6_bind_address(int sck, const char *port, const char *address)
     return rv;
 #else
     return -1;
+#endif
+}
+
+/*****************************************************************************/
+/* returns error, zero is success, non zero is error */
+/* only works in linux */
+int
+g_set_no_new_privs(int only_if_unconfined)
+{
+#if !defined(HAVE_SYS_PRCTL_H) || !defined(PR_SET_NO_NEW_PRIVS)
+    return 0;
+#else
+    /*
+     * If the process is already confined in some way, then AppArmor/SELinux
+     * security transitions will be blocked after the use of NoNewPrivileges.
+     * For more information, see the Linux kernel source file
+     * Documentation/userspace-api/no_new_privs.rst
+     */
+    if (only_if_unconfined)
+    {
+        int fd = g_file_open_ro("/proc/self/attr/apparmor/current");
+        if (fd != -1)
+        {
+            char buf[16] = {0};
+            g_file_read(fd, buf, sizeof(buf) - 1);
+            g_file_close(fd);
+            if (g_strcmp(buf, "unconfined\n") != 0)
+            {
+                return 0;
+            }
+        }
+    }
+
+    return prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
 #endif
 }

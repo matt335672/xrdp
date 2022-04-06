@@ -619,7 +619,7 @@ kill_running_sesman(const char *pid_file)
         return 1;
     }
 
-    fd = g_file_open(pid_file);
+    fd = g_file_open_ro(pid_file);
 
     if (-1 == fd)
     {
