@@ -1,0 +1,32 @@
+abi <abi/3.0>,
+
+#include <tunables/global>
+
+profile xrdp /usr/sbin/xrdp {
+  #include <abstractions/base>
+  #include <abstractions/openssl>
+
+  capability kill,
+
+  # these seem to be requested from "xrdp --kill"
+  deny capability dac_override,
+  deny capability dac_read_search,
+
+  network inet  stream,
+  network inet6 stream,
+
+  /etc/xrdp/** r,
+
+  /etc/ssl/certs/ssl-cert-snakeoil.pem r,
+  /etc/ssl/private/ssl-cert-snakeoil.key r,
+
+  /usr/share/xrdp/** r,
+
+  /var/log/xrdp.log w,
+  @{run}/xrdp/xrdp.pid rw,
+  @{run}/xrdp/sockdir/xrdp_display_[0-9]* rw,
+  @{run}/xrdp/sockdir/xrdp_chansrv_socket_[0-9]* rw,
+
+  # Site-specific additions and overrides. See local/README for details.
+  #include if exists <local/usr.sbin.xrdp>
+}

@@ -1,0 +1,199 @@
+abi <abi/3.0>,
+
+#include <tunables/global>
+
+@{Xorg} = /usr/lib/xorg/Xorg
+@{Xvnc} = /usr/bin/Xtigervnc
+@{fusermount} = /{,usr/}bin/fusermount{,3}
+
+profile xrdp-sesman /usr/sbin/xrdp-sesman {
+  #include <abstractions/base>
+  #include <abstractions/authentication>
+  #include <abstractions/libpam-systemd>
+  #include <abstractions/nameservice>
+  #include <abstractions/openssl>
+  #include <abstractions/wutmp>
+
+  capability audit_write,
+  capability kill,
+  capability setgid,
+  capability setuid,
+
+  # apparently needed by cleanup_sockets()
+  capability fowner,
+
+  # why does xrdp-sesman want these?
+  deny capability dac_override,
+  deny capability dac_read_search,
+  deny capability net_admin,
+
+  signal (send) set=(term) peer=xrdp-sesman//xorg,
+  signal (send) set=(term) peer=xrdp-sesman//xrdp-chansrv,
+
+  /sys/kernel/mm/transparent_hugepage/hpage_pmd_size r,
+
+  audit deny /etc/xrdp/key.pem r,
+  /etc/xrdp/** r,
+
+  /etc/environment r,
+  /etc/default/locale r,
+  /etc/xrdp/startwm.sh Uxr,
+
+  /var/log/xrdp-sesman.log w,
+
+  owner @{PROC}/@{pid}/attr/apparmor/current r,
+
+  deny @{PROC}/@{pid}/mountinfo r,
+
+  owner @{run}/xrdp/xrdp-sesman.pid rw,
+  @{run}/xrdp/sockdir/ w,
+  @{run}/xrdp/sockdir/xrdpapi_[0-9]* w,
+  @{run}/xrdp/sockdir/xrdp_chansrv_audio_in_socket_[0-9]* w,
+  @{run}/xrdp/sockdir/xrdp_chansrv_audio_out_socket_[0-9]* w,
+
+  owner @{HOME}/.vnc/ w,
+  owner @{HOME}/.vnc/sesman_passwd-*@*:[0-9]* rw,
+
+  /{,usr/}bin/{bash,dash,sh} ix,
+
+  /usr/sbin/xrdp-chansrv Cx -> xrdp-chansrv,
+
+  profile xrdp-chansrv {
+    #include <abstractions/base>
+    #include <abstractions/xdg-desktop>
+    #include <abstractions/X>
+
+    /usr/sbin/xrdp-chansrv mr,
+
+    signal (receive) set=(term) peer=xrdp-sesman,
+
+    audit deny /etc/xrdp/key.pem r,
+    /etc/xrdp/** r,
+
+    owner @{run}/xrdp/sockdir/xrdpapi_[0-9]* w,
+    owner @{run}/xrdp/sockdir/xrdp_chansrv_socket_[0-9]* rw,
+    owner @{run}/xrdp/sockdir/xrdp_chansrv_audio_in_socket_[0-9]* w,
+    owner @{run}/xrdp/sockdir/xrdp_chansrv_audio_out_socket_[0-9]* w,
+
+    owner @{HOME}/.local/share/xrdp/ w,
+    owner @{HOME}/.local/share/xrdp/xrdp-chansrv.*.log w,
+    owner @{HOME}/.pcsc[0-9]*/ w,
+    owner @{HOME}/.pcsc[0-9]*/pcscd.comm rw,
+
+    # FUSE access
+
+    mount
+      fstype=fuse.xrdp-chansrv
+      options=(rw, nodev, nosuid)
+      xrdp-chansrv -> @{HOME}/thinclient_drives/,
+
+    unix (receive, send)
+      type=stream
+      peer=(label=xrdp-sesman//fusermount),
+
+    /dev/fuse rw,
+    owner @{HOME}/thinclient_drives/ rw,
+    @{fusermount} Px -> xrdp-sesman//fusermount,
+  }
+
+  # Note: fusermount(1) is setuid root, so be strict with it!
+  #
+  profile fusermount {
+    #include <abstractions/base>
+    #include <abstractions/nameservice>
+
+    @{fusermount} mr,
+
+    # why does fusermount want this?
+    deny capability sys_admin,
+
+    mount
+      fstype=fuse
+      options=(rw, nodev, nosuid)
+      /dev/fuse -> @{HOME}/thinclient_drives/,
+
+    mount
+      fstype=fuse.xrdp-chansrv
+      options=(rw, nodev, nosuid)
+      xrdp-chansrv -> @{HOME}/thinclient_drives/,
+
+    umount @{HOME}/thinclient_drives/,
+
+    /dev/fuse rw,
+    @{PROC}/@{pid}/mounts r,
+    /etc/fuse.conf r,
+
+    # file_inherit
+    deny unix,
+    deny @{run}/xrdp/sockdir/* rw,
+  }
+
+  /usr/bin/xauth Cx -> xauth,
+
+  profile xauth {
+    #include <abstractions/base>
+
+    /usr/bin/xauth mr,
+
+    owner @{HOME}/.Xauthority-[cln] rwl,
+    owner @{HOME}/.Xauthority rw,
+  }
+
+  @{Xorg} Cx -> xorg,
+  @{Xvnc} Cx -> xorg,
+
+  profile xorg {
+    #include <abstractions/base>
+    #include <abstractions/dbus-strict>
+    #include <abstractions/nameservice>
+    #include <abstractions/X>
+
+    @{Xorg} mr,
+    @{Xvnc} mr,
+
+    dbus send
+      bus=system
+      path=/org/freedesktop/login1
+      interface=org.freedesktop.login1.Manager
+      member=GetSessionByPID,
+
+    dbus send
+      bus=system
+      path=/org/freedesktop/login1/session/c[0-9]*
+      interface=org.freedesktop.login1.Session
+      member={ReleaseControl,TakeControl},
+
+    signal (receive) set=(term) peer=xrdp-sesman,
+
+    network netlink raw,
+
+    unix (accept, bind, listen, receive, send)
+      type=stream
+      addr="@/tmp/.X11-unix/X[0-9]*",
+
+    deny @{PROC}/cmdline r,
+    owner @{PROC}/@{pid}/cmdline r,
+
+    # X doesn't need anything in here, not running on hardware
+    deny /sys/** r,
+
+    /{,usr/}bin/{bash,dash,sh} ix,
+
+    /usr/bin/xkbcomp ix,
+    owner /tmp/server-*.xkm rw,
+
+    /etc/X11/** r,
+    /usr/share/fonts/X11/** r,
+
+    owner /tmp/.tX[0-9]*-lock rw,
+    owner /tmp/.X[0-9]*-lock rwl,
+    owner @{run}/xrdp/sockdir/xrdp_display_[0-9]* w,
+    owner @{run}/xrdp/sockdir/xrdp_disconnect_display_[0-9]* w,
+
+    owner @{HOME}/.vnc/sesman_passwd-*@*:[0-9]* r,
+    owner @{HOME}/.xorgxrdp.[0-9]*.log{,.old} rw,
+  }
+
+  # Site-specific additions and overrides. See local/README for details.
+  #include if exists <local/usr.sbin.xrdp-sesman>
+}

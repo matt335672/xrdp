@@ -491,6 +491,7 @@ AC_CONFIG_FILES([
   instfiles/default/Makefile
   instfiles/init.d/Makefile
   instfiles/Makefile
+  instfiles/apparmor.d/Makefile
   instfiles/pam.d/Makefile
   instfiles/pulse/Makefile
   instfiles/rc.d/Makefile
