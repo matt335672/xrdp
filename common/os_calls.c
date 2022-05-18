@@ -2162,7 +2162,7 @@ g_memcmp(const void *s1, const void *s2, int len)
 /*****************************************************************************/
 /* returns -1 on error, else return handle or file descriptor */
 int
-g_file_open(const char *file_name)
+g_file_open_rw(const char *file_name)
 {
 #if defined(_WIN32)
     return (int)CreateFileA(file_name, GENERIC_READ | GENERIC_WRITE,

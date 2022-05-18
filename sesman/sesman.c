@@ -777,15 +777,15 @@ main(int argc, char **argv)
         g_file_close(1);
         g_file_close(2);
 
-        if (g_file_open("/dev/null") < 0)
+        if (g_file_open_rw("/dev/null") < 0)
         {
         }
 
-        if (g_file_open("/dev/null") < 0)
+        if (g_file_open_rw("/dev/null") < 0)
         {
         }
 
-        if (g_file_open("/dev/null") < 0)
+        if (g_file_open_rw("/dev/null") < 0)
         {
         }
     }
@@ -843,7 +843,7 @@ main(int argc, char **argv)
     {
         /* writing pid file */
         char pid_s[32];
-        int fd = g_file_open(pid_file);
+        int fd = g_file_open_rw(pid_file);
 
         if (-1 == fd)
         {

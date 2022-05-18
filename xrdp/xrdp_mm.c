@@ -2686,7 +2686,7 @@ xrdp_mm_dump_jpeg(struct xrdp_mm *self, XRDP_ENC_DATA_DONE *enc_done)
     header.bytes_follow = enc_done->comp_bytes - (2 + pheader_bytes[0]);
     if (ii == 0)
     {
-        ii = g_file_open("/tmp/jpeg.beef.bin");
+        ii = g_file_open_rw("/tmp/jpeg.beef.bin");
         if (ii == -1)
         {
             ii = 0;
