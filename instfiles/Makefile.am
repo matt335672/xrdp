@@ -59,7 +59,6 @@ dist_startscript_DATA = \
 SUBDIRS =
 if LINUX
 SUBDIRS += \
-  apparmor.d \
   pam.d \
   pulse
 if HAVE_SYSTEMD
@@ -71,6 +70,9 @@ SUBDIRS += \
   default \
   init.d
 endif # HAVE_SYSTEMD
+if XRDP_APPARMOR
+  SUBDIRS += apparmor.d
+endif # XRDP_APPARMOR
 endif # LINUX
 
 if FREEBSD

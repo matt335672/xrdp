@@ -35,6 +35,10 @@ AM_CPPFLAGS = \
 # (see https://github.com/neutrinolabs/xrdp/pull/1843 )
 AM_CFLAGS = -no-suppress $(OPENSSL_CFLAGS)
 
+if XRDP_APPARMOR
+  AM_CPPFLAGS += -DUSE_APPARMOR
+endif
+
 module_LTLIBRARIES = \
   libcommon.la
 

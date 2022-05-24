@@ -3761,6 +3761,7 @@ g_set_no_new_privs(int only_if_unconfined)
      */
     if (only_if_unconfined)
     {
+#ifdef USE_APPARMOR
         int fd = g_file_open_ro("/proc/self/attr/apparmor/current");
         if (fd != -1)
         {
@@ -3772,6 +3773,7 @@ g_set_no_new_privs(int only_if_unconfined)
                 return 0;
             }
         }
+#endif
     }
 
     return prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);

@@ -181,6 +181,11 @@ AC_ARG_ENABLE(rdpsndaudin, AS_HELP_STRING([--enable-rdpsndaudin],
               [], [enable_rdpsndaudin=no])
 AM_CONDITIONAL(XRDP_RDPSNDAUDIN, [test x$enable_rdpsndaudin = xyes])
 
+AC_ARG_ENABLE(apparmor, AS_HELP_STRING([--enable-apparmor],
+              [Enable apparmor support (default: no)]),
+              [], [enable_apparmor=no])
+AM_CONDITIONAL(XRDP_APPARMOR, [test x$enable_apparmor = xyes])
+
 AC_ARG_WITH(imlib2, AC_HELP_STRING([--with-imlib2=ARG], [imlib2 library to use for non-BMP backgrounds (ARG=yes/no/<abs-path>)]),,)
 
 # Obsolete options
@@ -543,6 +548,7 @@ echo "  ipv6only                $enable_ipv6only"
 echo "  vsock                   $enable_vsock"
 echo "  auth mechanism          $auth_mech"
 echo "  rdpsndaudin             $enable_rdpsndaudin"
+echo "  AppArmor                $enable_apparmor"
 echo
 if test x$use_imlib2 = xyes; then
     echo "  with imlib2             yes"
