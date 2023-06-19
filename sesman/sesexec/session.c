@@ -45,6 +45,7 @@
 #include "list.h"
 #include "log.h"
 #include "login_info.h"
+#include "login_records.h"
 #include "os_calls.h"
 #include "sesexec.h"
 #include "string_calls.h"
@@ -666,6 +667,9 @@ session_start_wrapped(struct login_info *login_info,
                     "window manager (pid %d) exits to end the session",
                     s->display, window_manager_pid);
 
+                login_records_start_session(login_info, s->display,
+                                            window_manager_pid);
+
                 sd->win_mgr = window_manager_pid;
                 sd->x_server = display_pid;
                 sd->chansrv = chansrv_pid;
@@ -852,6 +856,8 @@ session_process_child_exit(struct session_data *sd,
     }
     else if (pid == sd->win_mgr)
     {
+        login_records_end_session(sd->params.display, pid, e);
+
         int wm_wait_time = g_time1() - sd->start_time;
 
         if (e->reason == E_XR_STATUS_CODE && e->val == 0)

@@ -188,6 +188,11 @@ AC_ARG_ENABLE(rdpsndaudin, AS_HELP_STRING([--enable-rdpsndaudin],
               [], [enable_rdpsndaudin=no])
 AM_CONDITIONAL(XRDP_RDPSNDAUDIN, [test x$enable_rdpsndaudin = xyes])
 
+AC_ARG_ENABLE(utmpx, AS_HELP_STRING([--enable-utmpx],
+              [Update utmpx (default: no)]),
+              [], [enable_utmpx=no])
+AM_CONDITIONAL(XRDP_UTMPX, [test x$enable_utmpx = xyes])
+
 AC_ARG_WITH(imlib2, AS_HELP_STRING([--with-imlib2=ARG], [imlib2 library to use for non-BMP backgrounds (ARG=yes/no/<abs-path>)]),,)
 
 AC_ARG_WITH(freetype2, AS_HELP_STRING([--with-freetype2=ARG], [freetype2 library to use for rendering fonts (ARG=yes/no/<abs-path>)]),,)
@@ -461,6 +466,17 @@ then
     [AC_MSG_ERROR([please install libmp3lame-dev or lamemp3-devel])])
 fi
 
+# checking for utmpx.h
+if test "x$enable_utmpx" = "xyes"
+then
+  AC_CHECK_HEADER([utmpx.h], [],
+    [AC_MSG_ERROR([Need utmpx.h header file for --enable-utmpx])])
+
+  AXRDP_CHECK_UTMPX_MEMBER_EXISTS([ut_host], [HAVE_UTMPX_UT_HOST])
+  AXRDP_CHECK_UTMPX_MEMBER_EXISTS([ut_exit], [HAVE_UTMPX_UT_EXIT])
+fi
+
+
 AS_IF( [test "x$enable_pixman" = "xyes"] , [PKG_CHECK_MODULES(PIXMAN, pixman-1 >= 0.1.0)] )
 
 # checking for TurboJPEG
@@ -628,6 +644,11 @@ echo "  ipv6only                $enable_ipv6only"
 echo "  vsock                   $enable_vsock"
 echo "  auth mechanism          $auth_mech"
 echo "  rdpsndaudin             $enable_rdpsndaudin"
+echo "  utmpx support           $enable_utmpx"
+if test x$enable_utmpx = xyes; then
+    echo "    utmpx.ut_host         $ac_cv_utmpx_has_ut_host"
+    echo "    utmpx.ut_exit         $ac_cv_utmpx_has_ut_exit"
+fi
 echo
 echo "  with imlib2             $use_imlib2"
 echo "  with freetype2          $use_freetype2"
