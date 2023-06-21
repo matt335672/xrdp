@@ -37,14 +37,23 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "login_info.h"
+
 #include "login_records.h"
+#include "os_calls.h"
 
 #ifdef USE_UTMPX
-#include <utmpx.h>
-#include <sys/time.h>
+#   include <utmpx.h>
+#   include <sys/time.h>
+#endif
 
-#include "login_info.h"
-#include "os_calls.h"
+#ifdef USE_WTMP
+#   ifdef HAVE_UTMP_H
+#       include <utmp.h>
+#   endif
+#   ifdef HAVE_LIB_UTIL_H
+#       include <libutil.h>
+#   endif
 #endif
 
 #if defined(USE_UTMPX)
@@ -135,6 +144,34 @@ update_utmpx(const struct login_info *login_info,
 #endif // USE_UTMPX
 
 /******************************************************************************/
+/***
+ * Update the wtmp file
+ *
+ * @param login_info Info about logged-in user. NULL if session is ending
+ * @param display Display number
+ */
+#if defined (USE_WTMP)
+static void
+update_wtmp(const struct login_info *login_info,
+            unsigned int display)
+{
+    char idbuff[16];
+
+    /* Use the display number in hex for the very limited ut_id field */
+    snprintf(idbuff, sizeof(idbuff), ":%x", display);
+
+    if (login_info != NULL)
+    {
+        logwtmp(idbuff, login_info->username, login_info->ip_addr);
+    }
+    else
+    {
+        logwtmp(idbuff, "", "");
+    }
+}
+#endif
+
+/******************************************************************************/
 #if !defined(USE_UTMPX)
 /* Dummy definition for systems not using utmpx */
 static void
@@ -145,12 +182,22 @@ update_utmpx(const struct login_info *login_info,
 }
 #endif
 
+#if !defined(USE_WTMP)
+/* Dummy definition for systems not using wtmp */
+static void
+update_wtmp(const struct login_info *login_info,
+            unsigned int display)
+{
+}
+#endif
+
 /******************************************************************************/
 void
 login_records_start_session(const struct login_info *login_info,
                             unsigned int display, int pid)
 {
     update_utmpx(login_info, display, pid, NULL);
+    update_wtmp(login_info, display);
 }
 
 /******************************************************************************/
@@ -159,4 +206,5 @@ login_records_end_session(unsigned int display, int pid,
                           const struct g_exit_status *e)
 {
     update_utmpx(NULL, display, pid, e);
+    update_wtmp(NULL, display);
 }

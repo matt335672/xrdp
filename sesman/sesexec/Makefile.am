@@ -13,6 +13,10 @@ if XRDP_UTMPX
     AM_CPPFLAGS += -DUSE_UTMPX
 endif
 
+if XRDP_WTMP
+    AM_CPPFLAGS += -DUSE_WTMP
+endif
+
 pkglibexec_PROGRAMS = \
   xrdp-sesexec
 

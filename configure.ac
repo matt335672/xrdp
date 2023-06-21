@@ -193,6 +193,11 @@ AC_ARG_ENABLE(utmpx, AS_HELP_STRING([--enable-utmpx],
               [], [enable_utmpx=no])
 AM_CONDITIONAL(XRDP_UTMPX, [test x$enable_utmpx = xyes])
 
+AC_ARG_ENABLE(wtmp, AS_HELP_STRING([--enable-wtmp],
+              [Update wtmp (default: no)]),
+              [], [enable_wtmp=no])
+AM_CONDITIONAL(XRDP_WTMP, [test x$enable_wtmp = xyes])
+
 AC_ARG_WITH(imlib2, AS_HELP_STRING([--with-imlib2=ARG], [imlib2 library to use for non-BMP backgrounds (ARG=yes/no/<abs-path>)]),,)
 
 AC_ARG_WITH(freetype2, AS_HELP_STRING([--with-freetype2=ARG], [freetype2 library to use for rendering fonts (ARG=yes/no/<abs-path>)]),,)
@@ -476,6 +481,23 @@ then
   AXRDP_CHECK_UTMPX_MEMBER_EXISTS([ut_exit], [HAVE_UTMPX_UT_EXIT])
 fi
 
+# checking for wtmp.h
+if test "x$enable_wtmp" = "xyes"
+then
+  # Check the includes which declare logwtmp()
+  AC_CHECK_HEADERS([utmp.h libutil.h])
+  AC_CHECK_DECL([logwtmp], [] ,
+    AC_MSG_ERROR([Can't find logwtmp() needed for --enable-wtmp]),
+    [#ifdef HAVE_UTMP_H
+#       include <utmp.h>
+#     endif
+#     ifdef HAVE_LIBUTIL_H
+#       include <libutil.h>
+#     endif])
+
+  AC_SEARCH_LIBS([logwtmp], [util])
+fi
+
 
 AS_IF( [test "x$enable_pixman" = "xyes"] , [PKG_CHECK_MODULES(PIXMAN, pixman-1 >= 0.1.0)] )
 
@@ -649,6 +671,7 @@ if test x$enable_utmpx = xyes; then
     echo "    utmpx.ut_host         $ac_cv_utmpx_has_ut_host"
     echo "    utmpx.ut_exit         $ac_cv_utmpx_has_ut_exit"
 fi
+echo "  wtmp support            $enable_wtmp"
 echo
 echo "  with imlib2             $use_imlib2"
 echo "  with freetype2          $use_freetype2"

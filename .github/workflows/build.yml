@@ -110,14 +110,14 @@ jobs:
       # define the standard environment variable used in the rest of the steps.
       CONF_FLAGS_amd64_min: "--disable-ipv6 --disable-jpeg --disable-fuse --disable-mp3lame
                   --disable-fdkaac --disable-opus --disable-rfxcodec --disable-painter
-                  --disable-pixman --disable-utmpx"
+                  --disable-pixman --disable-utmpx --disable-wtmp"
       CONF_FLAGS_amd64_max: "--enable-ipv6 --enable-jpeg --enable-fuse --enable-mp3lame
                   --enable-fdkaac --enable-opus --enable-rfxcodec --enable-painter
-                  --enable-pixman --enable-utmpx
+                  --enable-pixman --enable-utmpx --enable-wtmp
                   --with-imlib2 --with-freetype2 --enable-tests"
       CONF_FLAGS_i386_max: "--enable-ipv6 --enable-jpeg --enable-mp3lame
                   --enable-opus --enable-rfxcodec --enable-painter
-                  --disable-pixman --enable-utmpx
+                  --disable-pixman --enable-utmpx --enable-wtmp
                   --with-imlib2 --with-freetype2
                   --host=i686-linux --enable-tests"
 
