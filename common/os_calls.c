@@ -3166,7 +3166,7 @@ g_set_allusercontext(int uid)
    an exit_status struct can optionally be passed in to get the
    exit status of the child */
 int
-g_waitchild(struct exit_status *e)
+g_waitchild(struct g_exit_status *e)
 {
 #if defined(_WIN32)
     return 0;
@@ -3174,7 +3174,7 @@ g_waitchild(struct exit_status *e)
     int wstat;
     int rv;
 
-    struct exit_status dummy;
+    struct g_exit_status dummy;
 
     if (e == NULL)
     {
@@ -3242,10 +3242,10 @@ g_waitpid(int pid)
 
    Note that signal handlers are established with BSD-style semantics,
    so this call is NOT interrupted by a signal  */
-struct exit_status
+struct g_exit_status
 g_waitpid_status(int pid)
 {
-    struct exit_status exit_status = {.reason = E_XR_UNEXPECTED, .val = 0};
+    struct g_exit_status exit_status = {.reason = E_XR_UNEXPECTED, .val = 0};
 
 #if !defined(_WIN32)
     if (pid > 0)

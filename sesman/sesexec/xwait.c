@@ -142,7 +142,7 @@ wait_for_xserver(uid_t uid,
             }
             else
             {
-                struct exit_status e;
+                struct g_exit_status e;
 
                 fd[0] = -1; // File descriptor closed by fclose()
                 log_waitforx_messages(dp);

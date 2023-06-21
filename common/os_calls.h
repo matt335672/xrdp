@@ -23,16 +23,17 @@
 
 #include "arch.h"
 
-enum exit_reason
+enum g_exit_reason
 {
     E_XR_STATUS_CODE = 0, ///< 'val' contains exit status
     E_XR_SIGNAL, ///< 'val' contains a signal number
     E_XR_UNEXPECTED
 };
 
-struct exit_status
+// Name 'g_exit_status' chosen to avoid a collision with umtp.h on Linux
+struct g_exit_status
 {
-    enum exit_reason reason;
+    enum g_exit_reason reason;
     int val;
 };
 
@@ -299,9 +300,9 @@ int      g_setlogin(const char *name);
  */
 int      g_set_allusercontext(int uid);
 #endif
-int      g_waitchild(struct exit_status *e);
+int      g_waitchild(struct g_exit_status *e);
 int      g_waitpid(int pid);
-struct exit_status g_waitpid_status(int pid);
+struct g_exit_status g_waitpid_status(int pid);
 /*
  * Sets the process group ID of the indicated process to the specified value.
  * (POSIX.1)

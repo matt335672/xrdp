@@ -805,7 +805,7 @@ cleanup_sockets(int display)
 
 /******************************************************************************/
 static void
-exit_status_to_str(const struct exit_status *e, char buff[], int bufflen)
+exit_status_to_str(const struct g_exit_status *e, char buff[], int bufflen)
 {
     switch (e->reason)
     {
@@ -834,7 +834,7 @@ exit_status_to_str(const struct exit_status *e, char buff[], int bufflen)
 void
 session_process_child_exit(struct session_data *sd,
                            int pid,
-                           const struct exit_status *e)
+                           const struct g_exit_status *e)
 {
     if (pid == sd->x_server)
     {
