@@ -10,7 +10,10 @@ FreeBSD_task:
     - git submodule update --init --recursive
   configure_script:
     - ./bootstrap
-    - env CPPFLAGS=-I/usr/local/include LDFLAGS=-L/usr/local/lib ./configure --localstatedir=/var --enable-strict-locations --with-pkgconfigdir=/usr/local/libdata/pkgconfig --enable-strict-locations --enable-ipv6 --enable-opus --enable-jpeg --enable-fdkaac --enable-painter --enable-pixman --enable-fuse --with-imlib2 --with-freetype2
+    # Build with --enable-utmpx for testing, although pam_lastlog.so is a
+    # better way to do this. Note that wtmp was removed from FreeBSD
+    # from version 9.0
+    - env CPPFLAGS=-I/usr/local/include LDFLAGS=-L/usr/local/lib ./configure --localstatedir=/var --enable-strict-locations --with-pkgconfigdir=/usr/local/libdata/pkgconfig --enable-strict-locations --enable-ipv6 --enable-opus --enable-jpeg --enable-fdkaac --enable-painter --enable-pixman --enable-fuse --enable-utmpx --with-imlib2 --with-freetype2
   build_script:
     - make -j $(sysctl -n hw.ncpu || echo 4)
   check_script:
