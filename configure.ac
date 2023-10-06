@@ -39,6 +39,9 @@ case $host_os in
 	*darwin*)
 		macos=yes
 		;;
+	*solaris*)
+		solaris=yes
+		;;
 esac
 
 AM_CONDITIONAL(LINUX, [test "x$linux" = xyes])
@@ -46,6 +49,7 @@ AM_CONDITIONAL(FREEBSD, [test "x$freebsd" = xyes])
 AM_CONDITIONAL(OPENBSD, [test "x$openbsd" = xyes])
 AM_CONDITIONAL(NETBSD, [test "x$netbsd" = xyes])
 AM_CONDITIONAL(MACOS, [test "x$macos" = xyes])
+AM_CONDITIONAL(SOLARIS, [test "x$solaris" = xyes])
 
 AC_CHECK_SIZEOF([int])
 AC_CHECK_SIZEOF([long])
@@ -205,6 +209,8 @@ AX_GCC_FUNC_ATTRIBUTE([format])
 AX_TYPE_SOCKLEN_T
 AX_CFLAGS_WARN_ALL
 AX_APPEND_COMPILE_FLAGS([-Wwrite-strings])
+AM_COND_IF([SOLARIS],
+  [AX_APPEND_COMPILE_FLAGS([-D_XOPEN_SOURCE=600 -D__EXTENSIONS__])])
 
 AM_COND_IF([LINUX],
   [AX_APPEND_COMPILE_FLAGS([-Werror])]) # bsd has warnings that have not been fixed yet
@@ -215,6 +221,10 @@ AM_COND_IF([DEVEL_DEBUG],
 
 # Function setusercontext() is in BSD -lutil but N/A on Solaris or GNU systems
 AC_SEARCH_LIBS([setusercontext], [util])
+
+# Some systems (e.g. Solaris) need -lnsl and/or -lsocket adding for
+# network programs
+AX_LIB_SOCKET_NSL
 
 # Define HAVE_XXXXX macros for some system functions
 AC_CHECK_FUNCS([setusercontext getgrouplist])

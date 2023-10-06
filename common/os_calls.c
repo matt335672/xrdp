@@ -36,6 +36,7 @@
 #if defined(sun) || defined(__sun)
 #define ctid_t id_t
 #endif
+#include <limits.h>
 #include <unistd.h>
 #include <errno.h>
 #include <netinet/in.h>
