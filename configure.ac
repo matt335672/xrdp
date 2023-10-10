@@ -209,8 +209,14 @@ AX_GCC_FUNC_ATTRIBUTE([format])
 AX_TYPE_SOCKLEN_T
 AX_CFLAGS_WARN_ALL
 AX_APPEND_COMPILE_FLAGS([-Wwrite-strings])
-AM_COND_IF([SOLARIS],
-  [AX_APPEND_COMPILE_FLAGS([-D_XOPEN_SOURCE=600 -D__EXTENSIONS__])])
+AM_COND_IF([SOLARIS],[
+  AX_APPEND_COMPILE_FLAGS([-D_XOPEN_SOURCE=600 -D__EXTENSIONS__])
+  # This name/description taken from openssh-portable
+  AC_DEFINE([PAM_SUN_CODEBASE], [1],
+    [Define if you are using Solaris-derived PAM which
+    passes pam_messages to the conversation function
+    with an extra level of indirection])
+])
 
 AM_COND_IF([LINUX],
   [AX_APPEND_COMPILE_FLAGS([-Werror])]) # bsd has warnings that have not been fixed yet

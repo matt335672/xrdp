@@ -55,6 +55,7 @@ struct authmod_params
 {
     const char *username;
     char password[MAX_PASSWORD_LEN + 1];
+    int use_uds;
     const char *command;
     int start_session;
 };
@@ -77,12 +78,13 @@ usage(void)
     g_printf("options:\n");
     g_printf("    -p <password>\n"
              "    -F <file-descriptor>  Read password from this file descriptor\n"
+             "    -U                    Use a UDS login\n"
              "    -c <command>          Start a session and run the\n"
              "                          specified non-interactive command\n"
              "                          in it\n");
     g_printf("\nIf username is omitted, the current user is used, and.\n"
              "a UDS login is attempted\n"
-             "If username is provided, password is needed.\n"
+             "If username is provided without -U, password is needed.\n"
              "    Password is prompted for if -p or -F are not specified\n");
 }
 
@@ -135,10 +137,11 @@ parse_program_args(int argc, char *argv[], struct authmod_params *amp)
 
     amp->username = NULL;
     amp->password[0] = '\0';
+    amp->use_uds = 0;
     amp->start_session = 0;
     amp->command = NULL;
 
-    while ((opt = getopt(argc, argv, "c:p:F:")) != -1)
+    while ((opt = getopt(argc, argv, "c:p:F:U")) != -1)
     {
         switch (opt)
         {
@@ -188,6 +191,10 @@ parse_program_args(int argc, char *argv[], struct authmod_params *amp)
                 }
                 break;
 
+            case 'U':
+                amp->use_uds = 1;
+                break;
+
             default:
                 LOG(LOG_LEVEL_ERROR, "Unrecognised switch '%c'", (char)opt);
                 params_ok = 0;
@@ -212,7 +219,12 @@ parse_program_args(int argc, char *argv[], struct authmod_params *amp)
     else
     {
         amp->username = argv[optind];
-        if (!password_set)
+        if (amp->use_uds && password_set)
+        {
+            LOG(LOG_LEVEL_WARNING, "Ignoring password as -U is set");
+            amp->password[0] = '\0';
+        }
+        else if (!amp->use_uds && !password_set)
         {
             const char *p = getpass("Password: ");
             if (p == NULL)
@@ -286,9 +298,19 @@ main(int argc, char **argv)
         enum scp_login_status errorcode;
         char errstr[64];
 
+        if (g_getuid() != 0)
+        {
+            LOG(LOG_LEVEL_WARNING,
+                "Running authtest as non-root may not work");
+        }
+
         if (amp.username == NULL)
         {
             auth_info = auth_uds(this_user, &errorcode);
+        }
+        else if (amp.use_uds)
+        {
+            auth_info = auth_uds(amp.username, &errorcode);
         }
         else
         {
@@ -325,6 +347,8 @@ main(int argc, char **argv)
 
     g_free(this_user);
     log_end();
+
+    memset(&amp, '\0', sizeof(amp)); // Clear passwords, etc
 
     return rv;
 }

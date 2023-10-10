@@ -15,6 +15,39 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+/*
+ * The use of PAM_SUN_CODEBASE has been copied from openssh-portable, to
+ * which the following applies:-
+ *
+ * Copyright (c) 2002 Networks Associates Technology, Inc.
+ * All rights reserved.
+ *
+ * This software was developed for the FreeBSD Project by ThinkSec AS and
+ * NAI Labs, the Security Research Division of Network Associates, Inc.
+ * under DARPA/SPAWAR contract N66001-01-C-8035 ("CBOSS"), as part of the
+ * DARPA CHATS research program.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ */
 
 /**
  *
@@ -36,6 +69,20 @@
 
 #include <stdio.h>
 #include <security/pam_appl.h>
+
+/* OpenGroup RFC86.0 and XSSO specify no "const" on arguments */
+#ifdef PAM_SUN_CODEBASE
+# define PAM_CONST      /* Solaris, HP-UX, SunOS */
+#else
+# define PAM_CONST  const   /* LinuxPAM, OpenPAM, AIX */
+#endif
+
+/* Ambiguity in spec: is it an array of pointers or a pointer to an array? */
+#ifdef PAM_SUN_CODEBASE
+# define PAM_MSG_MEMBER(msg, n, member) ((*(msg))[(n)].member)
+#else
+# define PAM_MSG_MEMBER(msg, n, member) ((msg)[(n)]->member)
+#endif
 
 /* Allows the conversation function to find required items */
 struct conv_func_data
@@ -114,7 +161,7 @@ msg_style_to_str(int msg_style, char *buff, unsigned int bufflen)
  */
 
 static int
-verify_pam_conv(int num_msg, const struct pam_message **msg,
+verify_pam_conv(int num_msg, PAM_CONST struct pam_message **msg,
                 struct pam_response **resp, void *appdata_ptr)
 {
     int i;
@@ -135,12 +182,15 @@ verify_pam_conv(int num_msg, const struct pam_message **msg,
     {
         for (i = 0; i < num_msg && rv == PAM_SUCCESS; i++)
         {
+            int msg_style = PAM_MSG_MEMBER(msg, i, msg_style);
+            const char *msgstr = PAM_MSG_MEMBER(msg, i, msg);
+
             LOG_DEVEL(LOG_LEVEL_INFO, "Handling struct pam_message"
                       " { style = %s, msg = \"%s\" }",
-                      msg_style_to_str(msg[i]->msg_style, sb, sizeof (sb)),
-                      msg[i]->msg == NULL ? "<null>" : msg[i]->msg);
+                      msg_style_to_str(msg_style, sb, sizeof (sb)),
+                      msgstr == NULL ? "<null>" : msgstr);
 
-            switch (msg[i]->msg_style)
+            switch (msg_style)
             {
                 case PAM_PROMPT_ECHO_OFF: /* password */
                     conv_func_data = (struct conv_func_data *) appdata_ptr;
@@ -159,19 +209,19 @@ verify_pam_conv(int num_msg, const struct pam_message **msg,
                     break;
 
                 case PAM_ERROR_MSG:
-                    LOG(LOG_LEVEL_ERROR, "PAM: %s", msg[i]->msg);
+                    LOG(LOG_LEVEL_ERROR, "PAM: %s", msgstr);
                     break;
 
                 case PAM_TEXT_INFO:
-                    LOG(LOG_LEVEL_INFO, "PAM: %s", msg[i]->msg);
+                    LOG(LOG_LEVEL_INFO, "PAM: %s", msgstr);
                     break;
 
                 default:
                 {
                     LOG(LOG_LEVEL_ERROR, "Unhandled message in verify_pam_conv"
                         " { style = %s, msg = \"%s\" }",
-                        msg_style_to_str(msg[i]->msg_style, sb, sizeof (sb)),
-                        msg[i]->msg == NULL ? "<null>" : msg[i]->msg);
+                        msg_style_to_str(msg_style, sb, sizeof (sb)),
+                        msgstr == NULL ? "<null>" : msgstr);
                     rv = PAM_CONV_ERR;
                 }
             }
