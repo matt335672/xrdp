@@ -205,6 +205,9 @@ AX_GCC_FUNC_ATTRIBUTE([format])
 AX_TYPE_SOCKLEN_T
 AX_CFLAGS_WARN_ALL
 AX_APPEND_COMPILE_FLAGS([-Wwrite-strings])
+AX_CHECK_COMPILE_FLAG([-Wmissing-prototypes],
+  [AX_APPEND_COMPILE_FLAGS([-Wmissing-prototypes])],
+  , [-Werror])
 
 AM_COND_IF([LINUX],
   [AX_APPEND_COMPILE_FLAGS([-Werror])]) # bsd has warnings that have not been fixed yet
