@@ -228,6 +228,9 @@ AX_TYPE_SOCKLEN_T
 AX_CFLAGS_WARN_ALL
 AX_APPEND_COMPILE_FLAGS([-Wwrite-strings])
 AX_APPEND_COMPILE_FLAGS([-Wmissing-prototypes], ,[-Werror])
+AX_APPEND_COMPILE_FLAGS([-Wextra])
+AX_APPEND_COMPILE_FLAGS([-Wno-unused-parameter])
+AX_APPEND_COMPILE_FLAGS([-Wno-sign-compare])
 
 AM_COND_IF([LINUX],
   [AX_APPEND_COMPILE_FLAGS([-Werror])]) # bsd has warnings that have not been fixed yet
