@@ -33,7 +33,7 @@
 #include "string_calls.h"
 #include "fv1.h"
 
-const static char FV1_SIGNATURE[] = {'F', 'N', 'T', '1'};
+static const char FV1_SIGNATURE[] = {'F', 'N', 'T', '1'};
 
 /*****************************************************************************/
 struct fv1_glyph *

@@ -34,7 +34,7 @@ struct utf8_encode_sub_test
 };
 
 // Used as the simple test in UTF-8-test.txt
-const static char greek_kosme[] =
+static const char greek_kosme[] =
     "\xce\xba" // GREEK SMALL LETTER KAPPA
     "\xe1\xbd\xb9" // GREEK SMALL LETTER OMICRON WITH OXIA
     "\xcf\x83" // GREEK SMALL LETTER SIGMA
@@ -42,7 +42,7 @@ const static char greek_kosme[] =
     "\xce\xb5"; // GREEK SMALL LETTER EPSILON
 
 // See Issue #2603
-const static char simple_test_with_emoji[] =
+static const char simple_test_with_emoji[] =
     "Simple Test."
     "\xf0\x9f\x98\xa5"; // U+1F625 Disappointed But Relieved Face
 

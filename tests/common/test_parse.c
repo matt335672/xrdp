@@ -11,12 +11,12 @@
 
 #define ELEMENTS(x) (sizeof(x) / sizeof(x[0]))
 
-const static char
+static const char
 utf8_simple_test_with_emoji[] =
     "Simple Test."
     "\xf0\x9f\x98\xa5"; // U+1F625 Disappointed But Relieved Face
 
-const static char16_t
+static const char16_t
 utf16_simple_test_with_emoji[] =
 {
     'S', 'i', 'm', 'p', 'l', 'e', ' ', 'T', 'e', 's', 't', '.',
