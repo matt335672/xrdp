@@ -191,6 +191,8 @@ AM_CONDITIONAL(XRDP_UTMP, [test x$enable_utmp = xyes])
 
 AC_ARG_WITH(imlib2, AS_HELP_STRING([--with-imlib2=ARG], [imlib2 library to use for non-BMP backgrounds (ARG=yes/no/<abs-path>)]),,)
 
+AC_ARG_WITH(libpcsclite, AS_HELP_STRING([--with-libpcsclite=ARG], [libpcpslite  for smartcard redirection (ARG=yes/no/<abs-path>)]),,)
+
 AC_ARG_WITH(freetype2, AS_HELP_STRING([--with-freetype2=ARG], [freetype2 library to use for rendering fonts (ARG=yes/no/<abs-path>)]),,)
 
 # Obsolete options
@@ -288,6 +290,37 @@ esac
 
 if test x$use_imlib2 = xyes; then
     AC_DEFINE([USE_IMLIB2],1, [Compile with imlib2 support])
+fi
+
+# Find libpcsclite. We only need the includes
+case "$with_libpcsclite" in
+    '' | no) AC_MSG_NOTICE([libpcsclite will not be supported])
+        use_libpcsclite=no
+        ;;
+    yes)
+        PKG_CHECK_MODULES([LIBPCSCLITE], [libpcsclite >= 1.8.8],
+            [use_libpcsclite=yes],
+            [AC_MSG_ERROR([please install libpcsclite-dev or pcsc-lite-devel])])
+        ;;
+    /*) AC_MSG_CHECKING([for libpcsclite in $with_libpcsclite])
+        if test -f $with_libpcsclite/include/PCSC/winscard.h; then
+            LIBPCSCLITE_CFLAGS="-I $with_libpcsclite/include/PCSC",
+            AX_CHECK_COMPILE_FLAG([-pthread],
+                [LIBPCSCLITE_CFLAGS="$LIBPCSCLITE_CFLAGS -pthread"])
+        else
+            AC_MSG_RESULT([no])
+            AC_MSG_ERROR([Can't find $with_libpcsclite/include/PCSC/winscard.h])
+        fi
+        AC_MSG_RESULT([yes])
+        AC_SUBST([LIBPCSCLITE_CFLAGS])
+        use_libpcsclite=yes
+        ;;
+    *)  AC_MSG_ERROR([--with-libpcsclite needs yes/no or absolute path])
+esac
+AM_CONDITIONAL(XRDP_LIBPCSCLITE, [test x$use_libpcsclite = xyes])
+
+if test x$use_libpcsclite = xyes; then
+    AC_DEFINE([USE_LIBPCSCLITE],1, [Compile with libpcsclite support])
 fi
 
 # Find freetype2
@@ -606,6 +639,7 @@ AC_CONFIG_FILES([
   pkgconfig/xrdp-uninstalled.pc
   sesman/libsesman/Makefile
   sesman/chansrv/Makefile
+  sesman/chansrv/pcsc/Makefile
   sesman/Makefile
   sesman/sesexec/Makefile
   sesman/tools/Makefile
@@ -655,6 +689,7 @@ fi
 
 echo
 echo "  with imlib2             $use_imlib2"
+echo "  with libpcsclite        $use_libpcsclite"
 echo "  with freetype2          $use_freetype2"
 
 echo

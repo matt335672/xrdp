@@ -1,6 +1,5 @@
 EXTRA_DIST = \
   clipboard-notes.txt \
-  pcsc \
   wave-format-server.txt
 
 AM_CPPFLAGS = \
@@ -11,6 +10,10 @@ AM_CPPFLAGS = \
   -DXRDP_SOCKET_ROOT_PATH=\"${socketdir}\" \
   -I$(top_srcdir)/sesman/libsesman \
   -I$(top_srcdir)/common
+
+if XRDP_LIBPCSCLITE
+AM_CPPFLAGS += -I$(LIBPCSCLITE_CFLAGS)
+endif
 
 CHANSRV_EXTRA_LIBS =
 
@@ -65,16 +68,23 @@ xrdp_chansrv_SOURCES = \
   irp.h \
   rail.c \
   rail.h \
-  smartcard.c \
   smartcard.h \
-  smartcard_pcsc.c \
-  smartcard_pcsc.h \
   sound.c \
   sound.h \
   xcommon.c \
   xcommon.h \
   audin.c \
   audin.h
+
+if XRDP_LIBPCSCLITE
+xrdp_chansrv_SOURCES += \
+  smartcard.c \
+  smartcard_pcsc.c \
+  smartcard_pcsc.h
+else
+xrdp_chansrv_SOURCES += \
+  smartcard_dummy.c
+endif
 
 xrdp_chansrv_LDFLAGS = \
   $(X_LIBS)
@@ -85,3 +95,9 @@ xrdp_chansrv_LDADD = \
   $(top_builddir)/libipm/libipm.la \
   $(X_PRE_LIBS) -lXfixes -lXrandr -lX11 $(X_EXTRA_LIBS) \
   $(CHANSRV_EXTRA_LIBS)
+
+SUBDIRS =
+
+if XRDP_LIBPCSCLITE
+SUBDIRS += pcsc
+endif

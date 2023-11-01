@@ -21,6 +21,8 @@
  * smartcard redirection support
  */
 
+#include "arch.h"
+
 #ifndef _SMARTCARD_C
 #define _SMARTCARD_C
 
