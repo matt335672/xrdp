@@ -6,92 +6,27 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <fcntl.h>
-#include <errno.h>
 #include <pthread.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/un.h>
-#include <sys/stat.h>
 #include <poll.h>
 
-#include "string_calls.h"
+#include <winscard.h>
+
+#include "xrdp_pcsc.h"
 
 #define PCSC_API
 
-typedef unsigned char BYTE;
-typedef BYTE *LPBYTE;
-#ifdef __APPLE__
-typedef int LONG;
-typedef unsigned int DWORD;
-#else
-typedef long LONG;
-typedef unsigned long DWORD;
-#endif
-typedef DWORD *LPDWORD;
-typedef const void *LPCVOID;
-typedef const char *LPCSTR;
-typedef char *LPSTR;
-typedef void *LPVOID;
-typedef const BYTE *LPCBYTE;
-
-typedef LONG SCARDCONTEXT;
-typedef SCARDCONTEXT *LPSCARDCONTEXT;
-
-typedef LONG SCARDHANDLE;
-typedef SCARDHANDLE *LPSCARDHANDLE;
-
-#define MAX_ATR_SIZE 33
-
-typedef struct _SCARD_READERSTATE
-{
-    const char *szReader;
-    void *pvUserData;
-    DWORD dwCurrentState;
-    DWORD dwEventState;
-    DWORD cbAtr;
-    unsigned char rgbAtr[MAX_ATR_SIZE];
-} SCARD_READERSTATE, *LPSCARD_READERSTATE;
-
-typedef struct _SCARD_IO_REQUEST
-{
-    unsigned long dwProtocol;
-    unsigned long cbPciLength;
-} SCARD_IO_REQUEST, *PSCARD_IO_REQUEST, *LPSCARD_IO_REQUEST;
-
-#define SCARD_PROTOCOL_T0       0x0001 /**< T=0 active protocol. */
-#define SCARD_PROTOCOL_T1       0x0002 /**< T=1 active protocol. */
-#define SCARD_PROTOCOL_RAW      0x0004 /**< Raw active protocol. */
-
-PCSC_API SCARD_IO_REQUEST g_rgSCardT0Pci  = { SCARD_PROTOCOL_T0,  8 };
-PCSC_API SCARD_IO_REQUEST g_rgSCardT1Pci  = { SCARD_PROTOCOL_T1,  8 };
-PCSC_API SCARD_IO_REQUEST g_rgSCardRawPci = { SCARD_PROTOCOL_RAW, 8 };
+PCSC_API const SCARD_IO_REQUEST g_rgSCardT0Pci  = { SCARD_PROTOCOL_T0,  8 };
+PCSC_API const SCARD_IO_REQUEST g_rgSCardT1Pci  = { SCARD_PROTOCOL_T1,  8 };
+PCSC_API const SCARD_IO_REQUEST g_rgSCardRawPci = { SCARD_PROTOCOL_RAW, 8 };
 
 #define LLOG_LEVEL 5
 #define LLOGLN(_level, _args) \
     do { if (_level < LLOG_LEVEL) { printf _args ; printf("\n"); } } while (0)
 #define LHEXDUMP(_level, _args) \
     do { if  (_level < LLOG_LEVEL) { lhexdump _args ; } } while (0)
-
-#define SCARD_ESTABLISH_CONTEXT  0x01
-#define SCARD_RELEASE_CONTEXT    0x02
-#define SCARD_LIST_READERS       0x03
-#define SCARD_CONNECT            0x04
-#define SCARD_RECONNECT          0x05
-#define SCARD_DISCONNECT         0x06
-#define SCARD_BEGIN_TRANSACTION  0x07
-#define SCARD_END_TRANSACTION    0x08
-#define SCARD_TRANSMIT           0x09
-#define SCARD_CONTROL            0x0A
-#define SCARD_STATUS             0x0B
-#define SCARD_GET_STATUS_CHANGE  0x0C
-#define SCARD_CANCEL             0x0D
-#define SCARD_CANCEL_TRANSACTION 0x0E
-#define SCARD_GET_ATTRIB         0x0F
-#define SCARD_SET_ATTRIB         0x10
-
-#define SCARD_S_SUCCESS 0x00000000
-#define SCARD_F_INTERNAL_ERROR ((LONG)0x80100001)
 
 #define SET_UINT32(_data, _offset, _val) do { \
         (((BYTE*)(_data)) + (_offset))[0] = ((_val) >> 0)  & 0xff; \
@@ -163,12 +98,9 @@ lhexdump(void *p, int len)
 static int
 connect_to_chansrv(void)
 {
-    int bytes;
-    int dis;
+    unsigned int bytes;
     int error;
-    char *xrdp_session;
-    char *xrdp_display;
-    char *home_str;
+    const char *sockname;
     struct sockaddr_un saddr;
     struct sockaddr *psaddr;
 
@@ -177,32 +109,10 @@ connect_to_chansrv(void)
         /* already connected */
         return 0;
     }
-    xrdp_session = getenv("XRDP_SESSION");
-    if (xrdp_session == NULL)
+    if ((sockname = getenv("XRDP_LIBPCSCLITE_SOCKET")) == NULL)
     {
-        /* XRDP_SESSION must be set */
+        /* XRDP_LIBPCSCLITE_SOCKET must be set */
         LLOGLN(0, ("connect_to_chansrv: error, not xrdp session"));
-        return 1;
-    }
-    xrdp_display = getenv("DISPLAY");
-    if (xrdp_display == NULL)
-    {
-        /* DISPLAY must be set */
-        LLOGLN(0, ("connect_to_chansrv: error, display not set"));
-        return 1;
-    }
-    home_str = getenv("HOME");
-    if (home_str == NULL)
-    {
-        /* HOME must be set */
-        LLOGLN(0, ("connect_to_chansrv: error, home not set"));
-        return 1;
-    }
-    dis = g_get_display_num_from_display(xrdp_display);
-    if (dis < 0)
-    {
-        LLOGLN(0, ("connect_to_chansrv: error, don't understand DISPLAY='%s'",
-                   xrdp_display));
         return 1;
     }
     g_sck = socket(PF_LOCAL, SOCK_STREAM, 0);
@@ -214,8 +124,7 @@ connect_to_chansrv(void)
     memset(&saddr, 0, sizeof(struct sockaddr_un));
     saddr.sun_family = AF_UNIX;
     bytes = sizeof(saddr.sun_path);
-    snprintf(saddr.sun_path, bytes, "%s/.pcsc%d/pcscd.comm", home_str, dis);
-    saddr.sun_path[bytes - 1] = 0;
+    snprintf(saddr.sun_path, bytes, "%s", sockname);
     LLOGLN(10, ("connect_to_chansrv: connecting to %s", saddr.sun_path));
     psaddr = (struct sockaddr *) &saddr;
     bytes = sizeof(struct sockaddr_un);
@@ -261,13 +170,13 @@ send_message(int code, char *data, int bytes)
 
 /*****************************************************************************/
 static int
-get_message(int *code, char *data, int *bytes)
+get_message(unsigned int *code, char *data, unsigned int *bytes)
 {
     char header[8];
-    int max_bytes;
+    unsigned int max_bytes;
     int error;
     int recv_rv;
-    int lcode;
+    unsigned int lcode;
     struct pollfd pollfd;
 
     LLOGLN(10, ("get_message:"));
@@ -299,7 +208,7 @@ get_message(int *code, char *data, int *bytes)
                     }
                     else
                     {
-                        LLOGLN(10, ("get_message: lcode %d *code %d",
+                        LLOGLN(10, ("get_message: lcode %u *code %u",
                                     lcode, *code));
                     }
                 }
@@ -336,7 +245,7 @@ get_message(int *code, char *data, int *bytes)
         pthread_mutex_unlock(&g_mutex);
         return 1;
     }
-    if (recv(g_sck, data, *bytes, 0) != *bytes)
+    if (recv(g_sck, data, *bytes, 0) != (int)*bytes)
     {
         pthread_mutex_unlock(&g_mutex);
         return 1;
@@ -352,11 +261,15 @@ SCardEstablishContext(DWORD dwScope, LPCVOID pvReserved1, LPCVOID pvReserved2,
 {
     char msg[256];
     DWORD context;
-    int code;
-    int bytes;
-    int status;
+    unsigned int code;
+    unsigned int bytes;
+    unsigned int ReturnCode;
 
     LLOGLN(10, ("SCardEstablishContext:"));
+    if (phContext == NULL)
+    {
+        return SCARD_E_INVALID_PARAMETER;
+    }
     if (g_sck == -1)
     {
         if (connect_to_chansrv() != 0)
@@ -384,11 +297,11 @@ SCardEstablishContext(DWORD dwScope, LPCVOID pvReserved1, LPCVOID pvReserved2,
         LLOGLN(0, ("SCardEstablishContext: error, bad code"));
         return SCARD_F_INTERNAL_ERROR;
     }
-    context = GET_UINT32(msg, 0);
-    status = GET_UINT32(msg, 4);
+    ReturnCode = GET_UINT32(msg, 0);
+    context = GET_UINT32(msg, 4);
     LLOGLN(10, ("SCardEstablishContext: got context 0x%8.8x", (int)context));
     *phContext = context;
-    return status;
+    return ReturnCode;
 }
 
 /*****************************************************************************/
@@ -396,9 +309,9 @@ PCSC_API LONG
 SCardReleaseContext(SCARDCONTEXT hContext)
 {
     char msg[256];
-    int code;
-    int bytes;
-    int status;
+    unsigned int code;
+    unsigned int bytes;
+    unsigned int ReturnCode;
 
     LLOGLN(10, ("SCardReleaseContext:"));
     if (g_sck == -1)
@@ -424,9 +337,9 @@ SCardReleaseContext(SCARDCONTEXT hContext)
         LLOGLN(0, ("SCardReleaseContext: error, bad code"));
         return SCARD_F_INTERNAL_ERROR;
     }
-    status = GET_UINT32(msg, 0);
-    LLOGLN(10, ("SCardReleaseContext: got status 0x%8.8x", status));
-    return status;
+    ReturnCode = GET_UINT32(msg, 0);
+    LLOGLN(10, ("SCardReleaseContext: got status 0x%8.8x", ReturnCode));
+    return ReturnCode;
 }
 
 /*****************************************************************************/
@@ -449,8 +362,8 @@ SCardConnect(SCARDCONTEXT hContext, LPCSTR szReader, DWORD dwShareMode,
              LPDWORD pdwActiveProtocol)
 {
     char msg[256];
-    int code;
-    int bytes;
+    unsigned int code;
+    unsigned int bytes;
     int status;
     int offset;
 
@@ -525,8 +438,8 @@ PCSC_API LONG
 SCardDisconnect(SCARDHANDLE hCard, DWORD dwDisposition)
 {
     char msg[256];
-    int code;
-    int bytes;
+    unsigned int code;
+    unsigned int bytes;
     int status;
 
     LLOGLN(10, ("SCardDisconnect: hCard 0x%8.8x dwDisposition %d",
@@ -565,8 +478,8 @@ PCSC_API LONG
 SCardBeginTransaction(SCARDHANDLE hCard)
 {
     char msg[256];
-    int code;
-    int bytes;
+    unsigned int code;
+    unsigned int bytes;
     int status;
 
     LLOGLN(10, ("SCardBeginTransaction: hCard 0x%8.8x", (int)hCard));
@@ -608,8 +521,8 @@ PCSC_API LONG
 SCardEndTransaction(SCARDHANDLE hCard, DWORD dwDisposition)
 {
     char msg[256];
-    int code;
-    int bytes;
+    unsigned int code;
+    unsigned int bytes;
     int status;
 
     LLOGLN(10, ("SCardEndTransaction:"));
@@ -649,12 +562,12 @@ SCardStatus(SCARDHANDLE hCard, LPSTR mszReaderName, LPDWORD pcchReaderLen,
             LPDWORD pcbAtrLen)
 {
     char *msg;
-    int code;
-    int bytes;
+    unsigned int code;
+    unsigned int bytes;
     int status;
     int offset;
     int cchReaderLen;
-    int to_copy;
+    unsigned int to_copy;
 
     LLOGLN(10, ("SCardStatus:"));
     if (hCard == 0)
@@ -743,9 +656,9 @@ SCardGetStatusChange(SCARDCONTEXT hContext, DWORD dwTimeout,
 {
     char *msg;
     const char *rname;
-    int bytes;
-    int code;
-    int index;
+    unsigned int bytes;
+    unsigned int code;
+    unsigned int index;
     int offset;
     int str_len;
     int status;
@@ -884,8 +797,8 @@ SCardControl(SCARDHANDLE hCard, DWORD dwControlCode, LPCVOID pbSendBuffer,
              LPDWORD lpBytesReturned)
 {
     char *msg;
-    int bytes;
-    int code;
+    unsigned int bytes;
+    unsigned int code;
     int offset;
     int status = 0;
 
@@ -961,8 +874,8 @@ SCardTransmit(SCARDHANDLE hCard, const SCARD_IO_REQUEST *pioSendPci,
               LPDWORD pcbRecvLength)
 {
     char *msg;
-    int bytes;
-    int code;
+    unsigned int bytes;
+    unsigned int code;
     int offset;
     int status;
     int extra_len;
@@ -1096,114 +1009,108 @@ SCardListReaderGroups(SCARDCONTEXT hContext, LPSTR mszGroups,
 
 /*****************************************************************************/
 PCSC_API LONG
-SCardListReaders(SCARDCONTEXT hContext, LPCSTR mszGroups, LPSTR mszReaders,
-                 LPDWORD pcchReaders)
+SCardListReaders(SCARDCONTEXT hContext, /* @unused */ LPCSTR mszGroups,
+                 LPSTR mszReaders, LPDWORD pcchReaders)
 {
-    char *msg;
-    char *reader_names;
-    int reader_names_index;
-    int code;
-    int bytes;
-    int num_readers;
-    int status;
-    int offset;
-    int index;
-    int val;
-    int llen;
-    char reader[100];
+    char msg[8192];
+    unsigned int code;
+    unsigned int bytes;
+    unsigned int offset;
+    unsigned int fmszReadersIsNULL = (mszReaders == NULL);
+    LONG ReturnCode;
+    unsigned int cBytes;
+    char *readers_list_out = mszReaders;
+
+    (void)mszGroups;
 
     LLOGLN(10, ("SCardListReaders:"));
-    LLOGLN(10, ("SCardListReaders: mszGroups %s", mszGroups));
-    LLOGLN(10, ("SCardListReaders: *pcchReaders %d", (int)*pcchReaders));
     if (g_sck == -1)
     {
         LLOGLN(0, ("SCardListReaders: error, not connected"));
         return SCARD_F_INTERNAL_ERROR;
     }
-    if ((mszGroups == NULL) && (mszReaders == NULL))
+
+    if (pcchReaders == NULL)
     {
-        *pcchReaders = 0;
+        return SCARD_E_INVALID_PARAMETER;
     }
-    msg = (char *) malloc(8192);
+
+    if (*pcchReaders == SCARD_AUTOALLOCATE && mszReaders == NULL)
+    {
+        return SCARD_E_INVALID_PARAMETER;
+    }
+
     offset = 0;
     SET_UINT32(msg, offset, hContext);
     offset += 4;
-    if (mszGroups != 0)
-    {
-        unsigned int bytes_groups = strlen(mszGroups);
-        SET_UINT32(msg, offset, bytes_groups);
-        offset += 4;
-        memcpy(msg + offset, mszGroups, bytes_groups);
-        offset += bytes_groups;
-    }
-    else
-    {
-        SET_UINT32(msg, offset, 0);
-        offset += 4;
-    }
-    val = *pcchReaders;
-    SET_UINT32(msg, offset, val);
+
+    // PCSC-Lite currently ignores the mszGroups parameter, so we
+    // will too. We'll send 0, reresenting a NULL string
+    SET_UINT32(msg, offset, 0);
     offset += 4;
+    SET_UINT32(msg, offset, fmszReadersIsNULL);
+    offset += 4;
+    SET_UINT32(msg, offset, *pcchReaders);
+    offset += 4;
+
     if (send_message(SCARD_LIST_READERS, msg, offset) != 0)
     {
         LLOGLN(0, ("SCardListReaders: error, send_message"));
-        free(msg);
         return SCARD_F_INTERNAL_ERROR;
     }
-    bytes = 8192;
+
+    bytes = sizeof(msg) - 8;
     code = SCARD_LIST_READERS;
     if (get_message(&code, msg, &bytes) != 0)
     {
         LLOGLN(0, ("SCardListReaders: error, get_message"));
-        free(msg);
         return SCARD_F_INTERNAL_ERROR;
     }
     if (code != SCARD_LIST_READERS)
     {
         LLOGLN(0, ("SCardListReaders: error, bad code"));
-        free(msg);
         return SCARD_F_INTERNAL_ERROR;
     }
     offset = 0;
-    llen = GET_UINT32(msg, offset);
+    ReturnCode = GET_UINT32(msg, offset);
+    LLOGLN(10, ("SCardListReaders: status 0x%8.8x", (int)ReturnCode));
     offset += 4;
-    num_readers = GET_UINT32(msg, offset);
+    cBytes = GET_UINT32(msg, offset);
     offset += 4;
-    LLOGLN(10, ("SCardListReaders: mszReaders %p pcchReaders %p num_readers %d",
-                mszReaders, pcchReaders, num_readers));
-    reader_names = (char *) malloc(8192);
-    reader_names_index = 0;
-    for (index = 0; index < num_readers; index++)
+
+    // auto-allocate memory, if the user has requested it
+    if (ReturnCode == SCARD_S_SUCCESS && *pcchReaders == SCARD_AUTOALLOCATE)
     {
-        memcpy(reader, msg + offset, 100);
-        bytes = strlen(reader);
-        memcpy(reader_names + reader_names_index, reader, bytes);
-        reader_names_index += bytes;
-        reader_names[reader_names_index] = 0;
-        reader_names_index++;
-        offset += 100;
-        LLOGLN(10, ("SCardListReaders: readername %s", reader));
+        if ((readers_list_out = (char *)malloc(cBytes)) == NULL)
+        {
+            return SCARD_E_NO_MEMORY;
+        }
+        *(char **)mszReaders = readers_list_out;
+        *pcchReaders = cBytes;
     }
-    reader_names[reader_names_index] = 0;
-    reader_names_index++;
-    status = GET_UINT32(msg, offset);
-    LLOGLN(10, ("SCardListReaders: status 0x%8.8x", status));
-    offset += 4;
-    if (mszReaders == 0)
+
+    if (ReturnCode == SCARD_E_INSUFFICIENT_BUFFER)
     {
-        reader_names_index = llen / 2;
+        *pcchReaders = cBytes;
     }
-    if (pcchReaders != 0)
+    else if (ReturnCode == SCARD_S_SUCCESS)
     {
-        *pcchReaders = reader_names_index;
+        if (fmszReadersIsNULL)
+        {
+            // Do nothing - user wants length
+        }
+        else if (*pcchReaders < cBytes)
+        {
+            ReturnCode = SCARD_E_INSUFFICIENT_BUFFER;
+        }
+        else
+        {
+            memcpy(readers_list_out, msg + offset, cBytes);
+        }
+        *pcchReaders = cBytes;
     }
-    if (mszReaders != 0)
-    {
-        memcpy(mszReaders, reader_names, reader_names_index);
-    }
-    free(msg);
-    free(reader_names);
-    return status;
+
+    return ReturnCode;
 }
 
 /*****************************************************************************/
@@ -1224,8 +1131,8 @@ PCSC_API LONG
 SCardCancel(SCARDCONTEXT hContext)
 {
     char msg[256];
-    int code;
-    int bytes;
+    unsigned int code;
+    unsigned int bytes;
     int status;
 
     LLOGLN(10, ("SCardCancel:"));
@@ -1286,8 +1193,8 @@ SCardSetAttrib(SCARDHANDLE hCard, DWORD dwAttrId, LPCBYTE pbAttr,
 }
 
 /*****************************************************************************/
-PCSC_API char *
-pcsc_stringify_error(const long code)
+PCSC_API const char *
+pcsc_stringify_error(const LONG code)
 {
     LLOGLN(10, ("pcsc_stringify_error: 0x%8.8x", (int)code));
     switch (code)
