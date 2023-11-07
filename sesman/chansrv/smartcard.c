@@ -148,8 +148,7 @@ static void scard_send_IsContextValid(IRP *irp,
                                       char *context, int context_bytes);
 static void scard_send_ListReaders(IRP *irp,
                                    char *context, int context_bytes,
-                                   char *groups, int cchReaders,
-                                   int wide);
+                                   char *groups, int cchReaders);
 static void scard_send_GetStatusChange(IRP *irp,
                                        char *context, int context_bytes,
                                        int wide,
@@ -426,7 +425,7 @@ scard_send_is_valid_context(void *user_data, char *context, int context_bytes)
  *****************************************************************************/
 int
 scard_send_list_readers(void *user_data, char *context, int context_bytes,
-                        char *groups, int cchReaders, int wide)
+                        char *groups, int cchReaders)
 {
     IRP *irp;
 
@@ -444,7 +443,7 @@ scard_send_list_readers(void *user_data, char *context, int context_bytes,
 
     /* send IRP to client */
     scard_send_ListReaders(irp, context, context_bytes, groups,
-                           cchReaders, wide);
+                           cchReaders);
 
     return 0;
 }
@@ -824,6 +823,8 @@ scard_make_new_ioctl(IRP *irp, tui32 ioctl)
     /*
      * format of device control request
      *
+     * See [MS-RDPEFS] 2.2.1.4.5
+     *
      * DeviceIoRequest
      * u16       RDPDR_CTYP_CORE
      * u16       PAKID_CORE_DEVICE_IOREQUEST
@@ -937,6 +938,17 @@ scard_release_resources(void)
     }
 }
 
+/*****************************************************************************/
+static void
+align_s(struct stream *s, unsigned int boundary)
+{
+    unsigned int over = (unsigned int)(s->p - s->data) % boundary;
+    if (over != 0)
+    {
+        out_uint8s(s, boundary - over);
+    }
+}
+
 /**
  *
  *****************************************************************************/
@@ -952,11 +964,14 @@ scard_send_EstablishContext(IRP *irp, int scope)
         return;
     }
 
+    /* Private Header ([MS-RPCE] 2.2.6.2 */
     s_push_layer(s, mcs_hdr, 4); /* bytes, set later */
     out_uint32_le(s, 0x00000000);
-    out_uint32_le(s, scope);
-    out_uint32_le(s, 0x00000000);
 
+    /* [MS-RDPESC] 2.2.2.1 EstablishContext_Call */
+    out_uint32_le(s, scope);
+
+    align_s(s, 8); // [MS-RPCE] 2.2.6.2 */
     s_mark_end(s);
 
     s_pop_layer(s, mcs_hdr);
@@ -1090,23 +1105,12 @@ scard_send_IsContextValid(IRP *irp, char *context, int context_bytes)
     free_stream(s);
 }
 
-/*****************************************************************************/
-static void
-align_s(struct stream *s, unsigned int boundary)
-{
-    unsigned int over = (unsigned int)(s->p - s->data) % boundary;
-    if (over != 0)
-    {
-        out_uint8s(s, boundary - over);
-    }
-}
-
 /**
  *
  *****************************************************************************/
 static void
 scard_send_ListReaders(IRP *irp, char *context, int context_bytes,
-                       char *groups, int cchReaders, int wide)
+                       char *groups, int cchReaders)
 {
     /* see [MS-RDPESC] 2.2.2.4
      *
@@ -1154,7 +1158,6 @@ scard_send_ListReaders(IRP *irp, char *context, int context_bytes,
     int            bytes_groups = 0; // Length of NDR for groups + 2 terminators
     int            val = 0;    // Referent Id for mszGroups (assume NULL)
     int            groups_len = 0; // strlen(groups)
-    tui32          ioctl;
 
     if ((sc = smartcards[irp->scard_index]) == NULL)
     {
@@ -1162,10 +1165,7 @@ scard_send_ListReaders(IRP *irp, char *context, int context_bytes,
         return;
     }
 
-    ioctl = (wide) ? SCARD_IOCTL_LIST_READERS_W :
-            SCARD_IOCTL_LIST_READERS_A;
-
-    if ((s = scard_make_new_ioctl(irp, ioctl)) == NULL)
+    if ((s = scard_make_new_ioctl(irp, SCARD_IOCTL_LIST_READERS_W)) == NULL)
     {
         LOG_DEVEL(LOG_LEVEL_ERROR, "scard_make_new_ioctl failed");
         return;
@@ -1174,14 +1174,7 @@ scard_send_ListReaders(IRP *irp, char *context, int context_bytes,
     if (groups != NULL && *groups != '\0')
     {
         groups_len = g_strlen(groups);
-        if (wide)
-        {
-            bytes_groups = (utf8_as_utf16_word_count(groups, groups_len) + 2) * 2;
-        }
-        else
-        {
-            bytes_groups = groups_len + 2;
-        }
+        bytes_groups = (utf8_as_utf16_word_count(groups, groups_len) + 2) * 2;
         val = 0x00020004;
     }
 
@@ -1210,18 +1203,9 @@ scard_send_ListReaders(IRP *irp, char *context, int context_bytes,
     {
         align_s(s, 4);
         out_uint32_le(s, bytes_groups);
-        if (wide)
-        {
-            out_utf8_as_utf16_le(s, groups, groups_len);
-            out_uint16_le(s, 0);
-            out_uint16_le(s, 0);
-        }
-        else
-        {
-            out_uint8p(s, groups, groups_len);
-            out_uint8(s, 0);
-            out_uint8(s, 0);
-        }
+        out_utf8_as_utf16_le(s, groups, groups_len);
+        out_uint16_le(s, 0);
+        out_uint16_le(s, 0);
     }
 
     s_mark_end(s);

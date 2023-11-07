@@ -37,11 +37,12 @@
 #include <config_ac.h>
 #endif
 
+#include <stdio.h>
+
 #define JAY_TODO_CONTEXT    0
 #define JAY_TODO_WIDE       1
 
-#define PCSC_STANDIN 1
-
+#include "ms-erref.h"
 #include "os_calls.h"
 #include "string_calls.h"
 #include "smartcard.h"
@@ -51,9 +52,11 @@
 #include "trans.h"
 #include "chansrv.h"
 #include "list.h"
+#include "xrdp_sockets.h"
 
-#if PCSC_STANDIN
+#include <winscard.h>
 
+#include "pcsc/xrdp_pcsc.h"
 
 extern int g_display_num; /* in chansrv.c */
 
@@ -86,8 +89,7 @@ struct pcsc_uds_client
 static struct list *g_uds_clients = 0; /* struct pcsc_uds_client */
 
 static struct trans *g_lis = 0;
-static char g_pcsclite_ipc_dir[256] = "";
-static char g_pcsclite_ipc_file[256] = "";
+static char g_pcsclite_ipc_file[XRDP_SOCKETS_MAXPATH];
 
 /*****************************************************************************/
 /* got a new unix domain socket connection */
@@ -279,6 +281,9 @@ free_uds_client(struct pcsc_uds_client *uds_client)
 }
 
 /*****************************************************************************/
+/**
+ * Converts a context from [MS-RDPESC] to a client-specific structure
+ */
 static struct pcsc_context *
 uds_client_add_context(struct pcsc_uds_client *uds_client,
                        char *context, int context_bytes)
@@ -306,6 +311,7 @@ uds_client_add_context(struct pcsc_uds_client *uds_client,
             LOG(LOG_LEVEL_ERROR,
                 "uds_client_add_context: failed to allocate memory for "
                 "uds_client->contexts");
+            g_free(pcscContext);
             return 0;
         }
     }
@@ -464,15 +470,45 @@ scard_function_establish_context_return(void *user_data,
                                         struct stream *in_s,
                                         int len, int status)
 {
+    /* see [MS-RDPESC] 2.2.3.2
+     *
+     * IDL:-
+     *
+     * typedef struct _REDIR_SCARDCONTEXT {
+     *    [range(0,16)] unsigned long cbContext;
+     *    [unique] [size_is(cbContext)] byte *pbContext;
+     *    } REDIR_SCARDCONTEXT;
+     *
+     * typedef struct _EstablishContext_Return {
+     *     long ReturnCode;
+     *     REDIR_SCARDCONTEXT Context;
+     *     } EstablishContext_Return;
+     *
+     * Type summary:-
+     *
+     * ReturnCode         32-bit word
+     * Context.cbContext  Unsigned 32-bit word
+     * Context.pbContext  Embedded full pointer to conformant array of bytes
+     *
+     * NDR:-
+     *
+     * Offset   Decription
+     * 0        ReturnCode
+     * 4        Context.cbContext
+     * 8        Context.pbContext Referent Identifier
+     * 12       length of context in bytes
+     * 16       Context data (up to 16 bytes)
+     */
     int bytes;
     int uds_client_id;
-    int context_bytes;
-    int app_context;
-    char context[16];
+    int return_code = MS_SCARD_E_UNEXPECTED;
+    unsigned int context_bytes;
+    int app_context = 0;
+    char context[16] = {0};
     struct stream *out_s;
     struct pcsc_uds_client *uds_client;
     struct trans *con;
-    struct pcsc_context *lcontext;
+    struct pcsc_context *lcontext = NULL;
 
     LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_function_establish_context_return:");
     LOG_DEVEL(LOG_LEVEL_DEBUG, "  status 0x%8.8x", status);
@@ -487,25 +523,41 @@ scard_function_establish_context_return(void *user_data,
         return 1;
     }
     con = uds_client->con;
-    lcontext = 0;
-    app_context = 0;
-    g_memset(context, 0, 16);
+
     if (status == 0)
     {
-        in_uint8s(in_s, 28);
-        in_uint32_le(in_s, context_bytes);
-        if (context_bytes > 16)
+        if (s_check_rem_and_log(in_s, 8 + 8 + 4 + 4 + 4 + 4,
+                                "[MS-RDPESC] REDIR_SCARD_CONTEXT(1)"))
         {
-            LOG(LOG_LEVEL_ERROR, "scard_function_establish_context_return: opps "
-                "context_bytes %d", context_bytes);
-            LOG_DEVEL_HEXDUMP(LOG_LEVEL_TRACE, "", in_s->p, context_bytes);
-            return 1;
+            in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.1 */
+            in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.2 */
+
+            in_uint32_le(in_s, return_code);
+            in_uint8s(in_s, 4); // Context.cbContext
+            in_uint8s(in_s, 4); // Context.pbContext Referent Identifier
+            in_uint32_le(in_s, context_bytes);
+            if (context_bytes > sizeof(context))
+            {
+                LOG(LOG_LEVEL_ERROR, "scard_function_establish_context_return:"
+                    " opps context_bytes %u", context_bytes);
+                LOG_DEVEL_HEXDUMP(LOG_LEVEL_TRACE, "", in_s->p, context_bytes);
+                context_bytes = sizeof(context);
+            }
+            if (s_check_rem_and_log(in_s, context_bytes,
+                                    "[MS-RDPESC] REDIR_SCARD_CONTEXT(1)"))
+            {
+                in_uint8a(in_s, context, context_bytes);
+            }
         }
-        in_uint8a(in_s, context, context_bytes);
-        lcontext = uds_client_add_context(uds_client, context, context_bytes);
-        app_context = lcontext->app_context;
-        LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_function_establish_context_return: "
-                  "app_context %d", app_context);
+        if (return_code == MS_SCARD_S_SUCCESS)
+        {
+            lcontext = uds_client_add_context(uds_client,
+                                              context, context_bytes);
+            app_context = lcontext->app_context;
+        }
+        LOG_DEVEL(LOG_LEVEL_DEBUG,
+                  "scard_function_establish_context_return: "
+                  "result %d app_context %d", return_code, app_context);
     }
     out_s = trans_get_out_s(con, 8192);
     if (out_s == NULL)
@@ -514,12 +566,12 @@ scard_function_establish_context_return(void *user_data,
     }
     s_push_layer(out_s, iso_hdr, 8);
     out_uint32_le(out_s, app_context);
-    out_uint32_le(out_s, status); /* SCARD_S_SUCCESS status */
+    out_uint32_le(out_s, return_code);
     s_mark_end(out_s);
     bytes = (int) (out_s->end - out_s->data);
     s_pop_layer(out_s, iso_hdr);
     out_uint32_le(out_s, bytes - 8);
-    out_uint32_le(out_s, 0x01); /* SCARD_ESTABLISH_CONTEXT 0x01 */
+    out_uint32_le(out_s, SCARD_ESTABLISH_CONTEXT);
     return trans_force_write(con);
 }
 
@@ -588,7 +640,7 @@ scard_function_release_context_return(void *user_data,
     bytes = (int) (out_s->end - out_s->data);
     s_pop_layer(out_s, iso_hdr);
     out_uint32_le(out_s, bytes - 8);
-    out_uint32_le(out_s, 0x02); /* SCARD_RELEASE_CONTEXT 0x02 */
+    out_uint32_le(out_s, SCARD_RELEASE_CONTEXT);
     return trans_force_write(con);
 }
 
@@ -647,7 +699,7 @@ scard_process_list_readers(struct trans *con, struct stream *in_s)
     pcscListReaders->uds_client_id = uds_client->uds_client_id;
     pcscListReaders->cchReaders = cchReaders;
     scard_send_list_readers(pcscListReaders, lcontext->context,
-                            lcontext->context_bytes, groups, cchReaders, 1);
+                            lcontext->context_bytes, groups, cchReaders);
     return 0;
 }
 
@@ -721,8 +773,7 @@ scard_function_list_readers_return(void *user_data,
      * 16       Multistring data
      */
     struct stream *out_s;
-    int            readers;
-    int            index;
+    int return_code = MS_SCARD_E_UNEXPECTED;
     int            bytes;
     int            cchReaders;
     int            llen;
@@ -731,6 +782,7 @@ scard_function_list_readers_return(void *user_data,
     struct trans *con;
     struct pcsc_list_readers *pcscListReaders;
     char *msz_readers = NULL;
+    unsigned int msz_readers_len = 0;
 
     LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_function_list_readers_return:");
     LOG_DEVEL(LOG_LEVEL_DEBUG, "  status 0x%8.8x", status);
@@ -754,32 +806,32 @@ scard_function_list_readers_return(void *user_data,
         return 1;
     }
     con = uds_client->con;
-    readers = 0;
     llen = 0;
     if (status == 0)
     {
-        // Skip [C706] PDU Header
-        in_uint8s(in_s, 16);
-        // Move to length of multistring in bytes
-        in_uint8s(in_s, 12);
+        in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.1 */
+        in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.2 */
+
+        in_uint32_le(in_s, return_code);
+        in_uint8s(in_s, 4); // cBytes
+        in_uint8s(in_s, 4); // msz pointer Referent Identifier
 
         in_uint32_le(in_s, llen);
         if (cchReaders > 0)
         {
             // Convert the wide multistring to a UTF-8 multistring
-            unsigned int u8len;
-            u8len = in_utf16_le_fixed_as_utf8_length(in_s, len / 2);
-            msz_readers = (char *)malloc(u8len);
+            msz_readers_len = in_utf16_le_fixed_as_utf8_length(in_s, llen / 2);
+            msz_readers = (char *)malloc(msz_readers_len);
             if (msz_readers == NULL)
             {
                 LOG(LOG_LEVEL_ERROR, "scard_function_list_readers_return: "
-                    "Can't allocate %u bytes of memory", u8len);
-                readers = 0;
+                    "Can't allocate %u bytes of memory", msz_readers_len);
+                msz_readers_len = 0;
             }
             else
             {
-                in_utf16_le_fixed_as_utf8(in_s, len / 2, msz_readers, u8len);
-                readers = count_multistring_elements(msz_readers, u8len);
+                in_utf16_le_fixed_as_utf8(in_s, llen / 2,
+                                          msz_readers, msz_readers_len);
             }
         }
     }
@@ -790,33 +842,15 @@ scard_function_list_readers_return(void *user_data,
         return 1;
     }
     s_push_layer(out_s, iso_hdr, 8);
-    out_uint32_le(out_s, llen);
-    out_uint32_le(out_s, readers);
-    {
-        const char *p = msz_readers;
-        for (index = 0; index < readers; index++)
-        {
-            unsigned int slen = strlen(p);
-            if (slen < 100)
-            {
-                out_uint8a(out_s, p, slen);
-                out_uint8s(out_s, 100 - slen);
-            }
-            else
-            {
-                out_uint8a(out_s, p, 99);
-                out_uint8s(out_s, 1);
-            }
-            p += (slen + 1);
-        }
-    }
+    out_uint32_le(out_s, return_code);
+    out_uint32_le(out_s, msz_readers_len);
+    out_uint8a(out_s, msz_readers, msz_readers_len);
     free(msz_readers);
-    out_uint32_le(out_s, status); /* SCARD_S_SUCCESS status */
     s_mark_end(out_s);
     bytes = (int) (out_s->end - out_s->data);
     s_pop_layer(out_s, iso_hdr);
     out_uint32_le(out_s, bytes - 8);
-    out_uint32_le(out_s, 0x03); /* SCARD_LIST_READERS 0x03 */
+    out_uint32_le(out_s, SCARD_LIST_READERS);
     return trans_force_write(con);
 }
 
@@ -859,7 +893,7 @@ scard_process_connect(struct trans *con, struct stream *in_s)
 int
 scard_function_connect_return(void *user_data,
                               struct stream *in_s,
-                              int len, int status)
+                              int len, unsigned int status)
 {
     int dwActiveProtocol;
     int hCard;
@@ -903,7 +937,7 @@ scard_function_connect_return(void *user_data,
         }
         else
         {
-            status = 0x8010000F; /* SCARD_E_PROTO_MISMATCH */
+            status = SCARD_E_PROTO_MISMATCH;
         }
     }
     out_s = trans_get_out_s(con, 8192);
@@ -919,7 +953,7 @@ scard_function_connect_return(void *user_data,
     bytes = (int) (out_s->end - out_s->data);
     s_pop_layer(out_s, iso_hdr);
     out_uint32_le(out_s, bytes - 8);
-    out_uint32_le(out_s, 0x04); /* SCARD_CONNECT 0x04 */
+    out_uint32_le(out_s, SCARD_CONNECT);
     return trans_force_write(con);
 }
 
@@ -989,7 +1023,7 @@ scard_function_disconnect_return(void *user_data,
     bytes = (int) (out_s->end - out_s->data);
     s_pop_layer(out_s, iso_hdr);
     out_uint32_le(out_s, bytes - 8);
-    out_uint32_le(out_s, 0x06); /* SCARD_DISCONNECT 0x06 */
+    out_uint32_le(out_s, SCARD_DISCONNECT);
     return trans_force_write(con);
 }
 
@@ -1059,7 +1093,7 @@ scard_function_begin_transaction_return(void *user_data,
     bytes = (int) (out_s->end - out_s->data);
     s_pop_layer(out_s, iso_hdr);
     out_uint32_le(out_s, bytes - 8);
-    out_uint32_le(out_s, 0x07); /* SCARD_BEGIN_TRANSACTION 0x07 */
+    out_uint32_le(out_s, SCARD_BEGIN_TRANSACTION);
     return trans_force_write(con);
 }
 
@@ -1133,7 +1167,7 @@ scard_function_end_transaction_return(void *user_data,
     bytes = (int) (out_s->end - out_s->data);
     s_pop_layer(out_s, iso_hdr);
     out_uint32_le(out_s, bytes - 8);
-    out_uint32_le(out_s, 0x08); /* SCARD_END_TRANSACTION 0x08 */
+    out_uint32_le(out_s, SCARD_END_TRANSACTION);
     return trans_force_write(con);
 }
 
@@ -1292,7 +1326,7 @@ scard_function_transmit_return(void *user_data,
     bytes = (int) (out_s->end - out_s->data);
     s_pop_layer(out_s, iso_hdr);
     out_uint32_le(out_s, bytes - 8);
-    out_uint32_le(out_s, 0x09); /* SCARD_TRANSMIT 0x09 */
+    out_uint32_le(out_s, SCARD_TRANSMIT);
     return trans_force_write(con);
 }
 
@@ -1387,7 +1421,7 @@ scard_function_control_return(void *user_data,
     bytes = (int) (out_s->end - out_s->data);
     s_pop_layer(out_s, iso_hdr);
     out_uint32_le(out_s, bytes - 8);
-    out_uint32_le(out_s, 0x0A); /* SCARD_CONTROL 0x0A */
+    out_uint32_le(out_s, SCARD_CONTROL);
     return trans_force_write(con);
 }
 
@@ -1582,7 +1616,7 @@ scard_function_status_return(void *user_data,
     bytes = (int) (out_s->end - out_s->data);
     s_pop_layer(out_s, iso_hdr);
     out_uint32_le(out_s, bytes - 8);
-    out_uint32_le(out_s, 0x0B); /* SCARD_STATUS 0x0B */
+    out_uint32_le(out_s, SCARD_STATUS);
     return trans_force_write(con);
 }
 
@@ -1719,7 +1753,7 @@ scard_function_get_status_change_return(void *user_data,
     bytes = (int) (out_s->end - out_s->data);
     s_pop_layer(out_s, iso_hdr);
     out_uint32_le(out_s, bytes - 8);
-    out_uint32_le(out_s, 0x0C); /* SCARD_ESTABLISH_CONTEXT 0x0C */
+    out_uint32_le(out_s, SCARD_ESTABLISH_CONTEXT);
     return trans_force_write(con);
 }
 
@@ -1786,7 +1820,7 @@ scard_function_cancel_return(void *user_data,
     bytes = (int) (out_s->end - out_s->data);
     s_pop_layer(out_s, iso_hdr);
     out_uint32_le(out_s, bytes - 8);
-    out_uint32_le(out_s, 0x0D); /* SCARD_CANCEL 0x0D */
+    out_uint32_le(out_s, SCARD_CANCEL);
     return trans_force_write(con);
 }
 
@@ -1820,79 +1854,78 @@ scard_process_msg(struct trans *con, struct stream *in_s, int command)
     rv = 0;
     switch (command)
     {
-        case 0x01: /* SCARD_ESTABLISH_CONTEXT */
+        case SCARD_ESTABLISH_CONTEXT:
             LOG_DEVEL(LOG_LEVEL_INFO, "scard_process_msg: SCARD_ESTABLISH_CONTEXT");
             rv = scard_process_establish_context(con, in_s);
             break;
-        case 0x02: /* SCARD_RELEASE_CONTEXT */
+        case SCARD_RELEASE_CONTEXT:
             LOG_DEVEL(LOG_LEVEL_INFO, "scard_process_msg: SCARD_RELEASE_CONTEXT");
             rv = scard_process_release_context(con, in_s);
             break;
 
-        case 0x03: /* SCARD_LIST_READERS */
-            /* This is only called from xrdp_pcsc.c */
+        case SCARD_LIST_READERS:
             LOG_DEVEL(LOG_LEVEL_INFO, "scard_process_msg: SCARD_LIST_READERS");
             rv = scard_process_list_readers(con, in_s);
             break;
 
-        case 0x04: /* SCARD_CONNECT */
+        case SCARD_CONNECT:
             LOG_DEVEL(LOG_LEVEL_INFO, "scard_process_msg: SCARD_CONNECT");
             rv = scard_process_connect(con, in_s);
             break;
 
-        case 0x05: /* SCARD_RECONNECT */
+        case SCARD_RECONNECT:
             LOG_DEVEL(LOG_LEVEL_INFO, "scard_process_msg: SCARD_RECONNECT");
             break;
 
-        case 0x06: /* SCARD_DISCONNECT */
+        case SCARD_DISCONNECT:
             LOG_DEVEL(LOG_LEVEL_INFO, "scard_process_msg: SCARD_DISCONNECT");
             rv = scard_process_disconnect(con, in_s);
             break;
 
-        case 0x07: /* SCARD_BEGIN_TRANSACTION */
+        case SCARD_BEGIN_TRANSACTION:
             LOG_DEVEL(LOG_LEVEL_INFO, "scard_process_msg: SCARD_BEGIN_TRANSACTION");
             rv = scard_process_begin_transaction(con, in_s);
             break;
 
-        case 0x08: /* SCARD_END_TRANSACTION */
+        case SCARD_END_TRANSACTION:
             LOG_DEVEL(LOG_LEVEL_INFO, "scard_process_msg: SCARD_END_TRANSACTION");
             rv = scard_process_end_transaction(con, in_s);
             break;
 
-        case 0x09: /* SCARD_TRANSMIT */
+        case SCARD_TRANSMIT:
             LOG_DEVEL(LOG_LEVEL_INFO, "scard_process_msg: SCARD_TRANSMIT");
             rv = scard_process_transmit(con, in_s);
             break;
 
-        case 0x0A: /* SCARD_CONTROL */
+        case SCARD_CONTROL:
             LOG_DEVEL(LOG_LEVEL_INFO, "scard_process_msg: SCARD_CONTROL");
             rv = scard_process_control(con, in_s);
             break;
 
-        case 0x0B: /* SCARD_STATUS */
+        case SCARD_STATUS:
             LOG_DEVEL(LOG_LEVEL_INFO, "scard_process_msg: SCARD_STATUS");
             rv = scard_process_status(con, in_s);
             break;
 
-        case 0x0C: /* SCARD_GET_STATUS_CHANGE */
+        case SCARD_GET_STATUS_CHANGE:
             LOG_DEVEL(LOG_LEVEL_INFO, "scard_process_msg: SCARD_GET_STATUS_CHANGE");
             rv = scard_process_get_status_change(con, in_s);
             break;
 
-        case 0x0D: /* SCARD_CANCEL */
+        case SCARD_CANCEL:
             LOG_DEVEL(LOG_LEVEL_INFO, "scard_process_msg: SCARD_CANCEL");
             rv = scard_process_cancel(con, in_s);
             break;
 
-        case 0x0E: /* SCARD_CANCEL_TRANSACTION */
+        case SCARD_CANCEL_TRANSACTION:
             LOG_DEVEL(LOG_LEVEL_INFO, "scard_process_msg: SCARD_CANCEL_TRANSACTION");
             break;
 
-        case 0x0F: /* SCARD_GET_ATTRIB */
+        case SCARD_GET_ATTRIB:
             LOG_DEVEL(LOG_LEVEL_INFO, "scard_process_msg: SCARD_GET_ATTRIB");
             break;
 
-        case 0x10: /* SCARD_SET_ATTRIB */
+        case SCARD_SET_ATTRIB:
             LOG_DEVEL(LOG_LEVEL_INFO, "scard_process_msg: SCARD_SET_ATTRIB");
             break;
 
@@ -1973,52 +2006,57 @@ my_pcsc_trans_conn_in(struct trans *trans, struct trans *new_trans)
 }
 
 /*****************************************************************************/
+/*
+ * Get the name of the PC/SC socket
+ *
+ * We don't use XRDP_LIBPCSCLITE_SOCKET for this, as it complicates
+ * restarting chansrv
+ */
+static void
+get_libpcsclite_socket(void)
+{
+    const char *display_str = getenv("DISPLAY");
+    int display = -1;
+    if (display_str == NULL || display_str[0] == '\0')
+    {
+        LOG(LOG_LEVEL_ERROR, "No DISPLAY - can't create PC/SC socket");
+    }
+    else
+    {
+        display = g_get_display_num_from_display(display_str);
+    }
+    if (display >= 0)
+    {
+        snprintf(g_pcsclite_ipc_file, XRDP_SOCKETS_MAXPATH,
+                 XRDP_LIBPCSCLITE_STR, g_getuid(), display);
+    }
+    else
+    {
+        g_pcsclite_ipc_file[0] = '\0';
+    }
+}
+
+
+/*****************************************************************************/
 int
 scard_pcsc_init(void)
 {
-    char *home;
-    int disp;
     int error;
 
     LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_pcsc_init:");
     if (g_lis == 0)
     {
+        get_libpcsclite_socket();
         g_lis = trans_create(2, 8192, 8192);
-        // TODO: See #2501. Use needs a way to move PCSCLITE_CSOCK_NAME
-        // to a location not under $HOME.
-        home = g_getenv("HOME");
-        disp = g_display_num;
-        g_snprintf(g_pcsclite_ipc_dir, 255, "%s/.pcsc%d", home, disp);
-
-        if (g_directory_exist(g_pcsclite_ipc_dir))
-        {
-            if (!g_remove_dir(g_pcsclite_ipc_dir))
-            {
-                LOG_DEVEL(LOG_LEVEL_WARNING, "scard_pcsc_init: g_remove_dir failed");
-            }
-        }
-        if (!g_directory_exist(g_pcsclite_ipc_dir))
-        {
-            if (!g_create_dir(g_pcsclite_ipc_dir))
-            {
-                if (!g_directory_exist(g_pcsclite_ipc_dir))
-                {
-                    LOG_DEVEL(LOG_LEVEL_WARNING, "scard_pcsc_init: g_create_dir failed");
-                }
-            }
-        }
-        /* Only the current user should be able to access the remote
-         * smartcard */
-        g_chmod_hex(g_pcsclite_ipc_dir, 0x700);
-        g_snprintf(g_pcsclite_ipc_file, 255, "%s/pcscd.comm", g_pcsclite_ipc_dir);
-        g_lis->trans_conn_in = my_pcsc_trans_conn_in;
         error = trans_listen(g_lis, g_pcsclite_ipc_file);
         if (error != 0)
         {
-            LOG(LOG_LEVEL_ERROR, "scard_pcsc_init: trans_listen failed for port %s",
+            LOG(LOG_LEVEL_ERROR,
+                "scard_pcsc_init: trans_listen failed for port %s",
                 g_pcsclite_ipc_file);
             return 1;
         }
+        g_lis->trans_conn_in = my_pcsc_trans_conn_in;
     }
     return 0;
 }
@@ -2035,40 +2073,7 @@ scard_pcsc_deinit(void)
         g_lis = 0;
     }
 
-    if (g_pcsclite_ipc_dir[0] != 0)
-    {
-        g_file_delete(g_pcsclite_ipc_file);
-        if (!g_remove_dir(g_pcsclite_ipc_dir))
-        {
-            LOG_DEVEL(LOG_LEVEL_WARNING, "scard_pcsc_deinit: g_remove_dir failed");
-        }
-        g_pcsclite_ipc_dir[0] = 0;
-    }
+    g_file_delete(g_pcsclite_ipc_file);
 
     return 0;
 }
-
-#else
-
-int
-scard_pcsc_get_wait_objs(tbus *objs, int *count, int *timeout)
-{
-    return 0;
-}
-int
-scard_pcsc_check_wait_objs(void)
-{
-    return 0;
-}
-int
-scard_pcsc_init(void)
-{
-    return 0;
-}
-int
-scard_pcsc_deinit(void)
-{
-    return 0;
-}
-
-#endif

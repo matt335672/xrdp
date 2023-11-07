@@ -99,7 +99,7 @@ int  scard_send_is_valid_context(void *user_data,
                                  char *context, int context_bytes);
 int  scard_send_list_readers(void *user_data,
                              char *context, int context_bytes,
-                             char *groups, int cchReaders, int wide);
+                             char *groups, int cchReaders);
 
 int  scard_send_get_status_change(void *user_data,
                                   char *context, int context_bytes,
