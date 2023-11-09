@@ -95,7 +95,8 @@ in
                     libfdk-aac-dev \
                     libimlib2-dev \
                     libopus-dev \
-                    libpixman-1-dev"
+                    libpixman-1-dev \
+                    libpcsclite-dev"
                 ;;
             *)
                 echo "unsupported feature set: $FEATURE_SET"
@@ -123,6 +124,7 @@ in
             libmp3lame-dev:i386 \
             libopus-dev:i386 \
             libpam0g-dev:i386 \
+            libpcsclite-dev:i386 \
             libssl-dev:i386 \
             libx11-dev:i386 \
             libxext-dev:i386 \
