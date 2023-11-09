@@ -30,26 +30,6 @@
 #include "irp.h"
 #include "trans.h"
 
-#define SCARD_SHARE_EXCLUSIVE       0x00000001
-#define SCARD_SHARE_SHARED          0x00000002
-#define SCARD_SHARE_DIRECT          0x00000003
-
-/* see [MS-RDPESC] 2.2.5 protocol identifier - Table A */
-#define SCARD_PROTOCOL_UNDEFINED    0x00000000
-#define SCARD_PROTOCOL_T0           0x00000001
-#define SCARD_PROTOCOL_T1           0x00000002
-#define SCARD_PROTOCOL_Tx           0x00000003
-#define SCARD_PROTOCOL_RAW          0x00010000
-
-/* see [MS-RDPESC] 2.2.5 protocol identifier - Table B */
-#define SCARD_PROTOCOL_DEFAULT      0x80000000
-#define SCARD_PROTOCOL_OPTIMAL      0x00000000
-
-/* initialization type */
-#define SCARD_LEAVE_CARD            0x00000000 /* do not do anything      */
-#define SCARD_RESET_CARD            0x00000001 /* reset smart card        */
-#define SCARD_UNPOWER_CARD          0x00000002 /* turn off and reset card */
-
 struct xrdp_scard_io_request
 {
     tui32 dwProtocol;
