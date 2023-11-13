@@ -32,6 +32,8 @@
 /* Opaque data types to us */
 typedef struct xfuse_info XFUSE_INFO;
 
+struct stream;
+
 enum irp_lookup_state
 {
     E_LOOKUP_GET_FH = 0,
@@ -102,7 +104,8 @@ struct irp
 
     void     (*callback)(struct stream *s, IRP *irp, tui32 DeviceId,
                          tui32 CompletionId, tui32 IoStatus);
-    void      *user_data;
+    void      *user_data;            /* user defined */
+    void     (*extra_destructor)(IRP *); /* user defined */
 };
 
 IRP *devredir_irp_new(void);
@@ -118,5 +121,13 @@ IRP *devredir_irp_find(tui32 completion_id);
 IRP *devredir_irp_find_by_fileid(tui32 FileId);
 IRP *devredir_irp_get_last(void);
 void  devredir_irp_dump(void);
+
+/*
+ * Can be used as the extra destructor if the user_data field
+ * is to be freed when the IRP is deleted.
+ *
+ * For more complex allocated user_data, use a custom extra destructor
+ */
+void devredir_irp_free_user_data(IRP *irp);
 
 #endif /* end ifndef __IRP_H */

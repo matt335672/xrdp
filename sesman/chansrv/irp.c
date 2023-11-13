@@ -135,6 +135,21 @@ IRP *devredir_irp_with_pathnamelen_new(unsigned int pathnamelen)
 }
 
 /**
+ * Destroy an IRP
+ *
+ * Call this after removing the IRP from any lists
+ */
+static void
+destroy_irp(IRP *irp)
+{
+    if (irp->extra_destructor != NULL)
+    {
+        irp->extra_destructor(irp);
+    }
+    g_free(irp);
+}
+
+/**
  * Delete specified IRP from linked list
  *
  * @return 0 on success, -1 on failure
@@ -175,7 +190,7 @@ int devredir_irp_delete(IRP *irp)
         if (lirp->next == NULL)
         {
             /* only one element in list */
-            g_free(lirp);
+            destroy_irp(lirp);
             g_irp_head = NULL;
             devredir_irp_dump(); // LK_TODO
             return 0;
@@ -183,20 +198,20 @@ int devredir_irp_delete(IRP *irp)
 
         lirp->next->prev = NULL;
         g_irp_head = lirp->next;
-        g_free(lirp);
+        destroy_irp(lirp);
     }
     else if (lirp->next == NULL)
     {
         /* we are at tail of linked list */
         lirp->prev->next = NULL;
-        g_free(lirp);
+        destroy_irp(lirp);
     }
     else
     {
         /* we are in between */
         lirp->prev->next = lirp->next;
         lirp->next->prev = lirp->prev;
-        g_free(lirp);
+        destroy_irp(lirp);
     }
 
     devredir_irp_dump(); // LK_TODO
@@ -281,4 +296,10 @@ void devredir_irp_dump(void)
         irp = irp->next;
     }
     LOG_DEVEL(LOG_LEVEL_DEBUG, "------- dumping IRPs done ---");
+}
+
+/*****************************************************************************/
+void devredir_irp_free_user_data(IRP *irp)
+{
+    g_free(irp->user_data);
 }
