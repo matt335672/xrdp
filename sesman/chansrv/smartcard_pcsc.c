@@ -259,6 +259,31 @@ get_pcsc_card_by_app_card(struct pcsc_uds_client *uds_client,
 }
 
 /*****************************************************************************/
+static int release_context_dummy_callback(int uds_client_id,
+        unsigned int ReturnCode)
+{
+    return 0;
+}
+
+/*****************************************************************************/
+/**
+ * Sends a release context call to the other end which doesn't need a response
+ * @param Context Context held by other end
+ */
+static void
+send_release_context_no_response(const struct redir_scardcontext *Context)
+{
+    struct release_context_call *cc = g_new0(struct release_context_call, 1);
+    if (cc != NULL)
+    {
+        cc->uds_client_id = 0;
+        cc->callback = release_context_dummy_callback;
+        cc->Context = *Context;
+        scard_send_release_context(cc);
+    }
+}
+
+/*****************************************************************************/
 static int
 free_uds_client(struct pcsc_uds_client *uds_client)
 {
@@ -297,8 +322,7 @@ free_uds_client(struct pcsc_uds_client *uds_client)
                 LOG_DEVEL(LOG_LEVEL_DEBUG, "  left over context %p",
                           context->context.pbContext);
                 scard_send_cancel(0, &context->context);
-                scard_send_release_context(0, context->context.pbContext,
-                                           context->context.cbContext);
+                send_release_context_no_response(&context->context);
                 g_free(context);
             }
         }
@@ -588,72 +612,91 @@ int scard_free_app_context(int uds_client_id,
 }
 
 /*****************************************************************************/
-/* returns error */
-int
-scard_process_release_context(struct trans *con, struct stream *in_s)
+static int
+send_long_return(int uds_client_id,
+                 enum pcsc_message_code msg_code,
+                 unsigned int ReturnCode)
 {
-    int hContext;
     struct pcsc_uds_client *uds_client;
-    struct pcsc_context *lcontext;
-    void *user_data;
 
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_release_context:");
-    uds_client = (struct pcsc_uds_client *) (con->callback_data);
-    in_uint32_le(in_s, hContext);
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_release_context: hContext 0x%8.8x", hContext);
-    user_data = (void *) (tintptr) (uds_client->uds_client_id);
-    lcontext = get_pcsc_context_by_app_context(uds_client, hContext);
-    if (lcontext == 0)
+    if ((uds_client = get_uds_client_by_id(uds_client_id)) == NULL)
     {
-        LOG(LOG_LEVEL_ERROR, "scard_process_release_context: "
-            "get_pcsc_context_by_app_context failed");
-        return 1;
-    }
-    scard_send_release_context(user_data, lcontext->context.pbContext,
-                               lcontext->context.cbContext);
-    uds_client_remove_context(uds_client, lcontext);
-    return 0;
-}
-
-/*****************************************************************************/
-/* returns error */
-int
-scard_function_release_context_return(void *user_data,
-                                      struct stream *in_s,
-                                      int len, int status)
-{
-    int bytes;
-    int uds_client_id;
-    struct stream *out_s;
-    struct pcsc_uds_client *uds_client;
-    struct trans *con;
-
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_function_release_context_return:");
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "  status 0x%8.8x", status);
-    uds_client_id = (int) (tintptr) user_data;
-    uds_client = (struct pcsc_uds_client *)
-                 get_uds_client_by_id(uds_client_id);
-    if (uds_client == 0)
-    {
-        LOG(LOG_LEVEL_ERROR, "scard_function_release_context_return: "
+        LOG(LOG_LEVEL_ERROR, "send_long_return: "
             "get_uds_client_by_id failed to find uds_client_id %d",
             uds_client_id);
         return 1;
     }
-    con = uds_client->con;
-    out_s = trans_get_out_s(con, 8192);
+    struct trans *con = uds_client->con;
+    struct stream *out_s = trans_get_out_s(con, 64);
     if (out_s == NULL)
     {
         return 1;
     }
     s_push_layer(out_s, iso_hdr, 8);
-    out_uint32_le(out_s, status); /* XSCARD_S_SUCCESS status */
+    out_uint32_le(out_s, ReturnCode);
     s_mark_end(out_s);
-    bytes = (int) (out_s->end - out_s->data);
+    unsigned int bytes = (unsigned int) (out_s->end - out_s->data);
     s_pop_layer(out_s, iso_hdr);
     out_uint32_le(out_s, bytes - 8);
-    out_uint32_le(out_s, SCARD_RELEASE_CONTEXT);
+    out_uint32_le(out_s, msg_code);
     return trans_force_write(con);
+}
+
+/*****************************************************************************/
+static int
+send_release_context_return(int uds_client_id,
+                            unsigned int ReturnCode)
+{
+    return send_long_return(uds_client_id, SCARD_RELEASE_CONTEXT, ReturnCode);
+}
+
+/*****************************************************************************/
+/* returns error */
+int
+scard_process_release_context(struct trans *con, struct stream *in_s)
+{
+    struct pcsc_uds_client *uds_client;
+    int uds_client_id;
+    unsigned int hContext;
+    struct pcsc_context *lcontext;
+    struct release_context_call *call_data;
+
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_release_context:");
+    uds_client = (struct pcsc_uds_client *) (con->callback_data);
+    uds_client_id = uds_client->uds_client_id;
+
+    if (!s_check_rem_and_log(in_s, 4, "Reading SCARD_RELEASE_CONTEXT"))
+    {
+        return send_release_context_return(uds_client_id,
+                                           XSCARD_F_INTERNAL_ERROR);
+    }
+
+    in_uint32_le(in_s, hContext);
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_release_context: hContext 0x%8.8x", hContext);
+
+    lcontext = get_pcsc_context_by_app_context(uds_client, hContext);
+    if (lcontext == 0)
+    {
+        LOG(LOG_LEVEL_ERROR, "scard_process_release_context: "
+            "get_pcsc_context_by_app_context failed");
+        return send_release_context_return(uds_client_id,
+                                           XSCARD_E_INVALID_HANDLE);
+    }
+
+    /* Allocate a block to describe the call */
+    if ((call_data = g_new0(struct release_context_call, 1)) == NULL)
+    {
+        return send_release_context_return(uds_client_id, XSCARD_E_NO_MEMORY);
+    }
+
+    call_data->uds_client_id = uds_client_id;
+    call_data->callback = send_release_context_return;
+    call_data->Context = lcontext->context;
+    LOG_DEVEL(LOG_LEVEL_DEBUG,
+              "scard_process_release_context: hContext 0x%8.8x",
+              hContext);
+    scard_send_release_context(call_data);
+    return 0;
 }
 
 /*****************************************************************************/

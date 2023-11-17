@@ -28,9 +28,6 @@ int scard_pcsc_get_wait_objs(tbus *objs, int *count, int *timeout);
 int scard_pcsc_check_wait_objs(void);
 int scard_pcsc_init(void);
 int scard_pcsc_deinit(void);
-int scard_function_release_context_return(void *user_data,
-        struct stream *in_s,
-        int len, int status);
 
 /* TODO : Put these in separate module */
 int scard_alloc_new_app_context(int uds_client_id,
