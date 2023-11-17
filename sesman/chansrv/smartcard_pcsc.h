@@ -34,6 +34,15 @@ int scard_function_establish_context_return(void *user_data,
 int scard_function_release_context_return(void *user_data,
         struct stream *in_s,
         int len, int status);
+
+/* TODO : Put these in separate module */
+int scard_alloc_new_app_context(int uds_client_id,
+                                const struct redir_scardcontext *context,
+                                unsigned int *app_context);
+
+int scard_free_app_context(int uds_client_id,
+                           const struct redir_scardcontext *context);
+
 int scard_function_list_readers_return(void *user_data,
                                        struct stream *in_s,
                                        int len, int status);

@@ -26,10 +26,6 @@
 #ifndef _SMARTCARD_C
 #define _SMARTCARD_C
 
-#include "parse.h"
-#include "irp.h"
-#include "trans.h"
-
 struct xrdp_scard_io_request
 {
     tui32 dwProtocol;
@@ -87,6 +83,15 @@ typedef struct reader_state
 
 } READER_STATE;
 
+/*****************************************************************************/
+/* Structures used to hold call state while waiting for the
+ * client to respond */
+struct redir_scardcontext  /* 2.2.1.1 */
+{
+    unsigned int cbContext;
+    char pbContext[16];
+};
+
 void scard_device_announce(tui32 device_id);
 int  scard_get_wait_objs(tbus *objs, int *count, int *timeout);
 int  scard_check_wait_objs(void);
@@ -96,7 +101,7 @@ int  scard_send_establish_context(void *user_data, int scope);
 int  scard_send_release_context(void *user_data,
                                 char *context, int context_bytes);
 int  scard_send_is_valid_context(void *user_data,
-                                 char *context, int context_bytes);
+                                 const struct redir_scardcontext *context);
 int  scard_send_list_readers(void *user_data,
                              char *context, int context_bytes,
                              char *groups, int cchReaders);
@@ -145,7 +150,7 @@ int  scard_send_control(void *user_data,
                         int recv_bytes, int control_code);
 
 int  scard_send_cancel(void *user_data,
-                       char *context, int context_bytes);
+                       const struct redir_scardcontext *context);
 
 int  scard_send_get_attrib(void *user_data, char *card, int card_bytes,
                            READER_STATE *rs);

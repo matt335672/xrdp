@@ -70,8 +70,7 @@ struct pcsc_card /* item for list of open cards in one context */
 struct pcsc_context
 {
     tui32 app_context;  /* application context, always 4 byte */
-    int context_bytes;  /* client context bytes */
-    char context[16];   /* client context */
+    struct redir_scardcontext context; /* Redirectory context */
     struct list *cards; /* these need to be released on close */
 };
 
@@ -147,7 +146,7 @@ get_uds_client_by_id(int uds_client_id)
 }
 
 /*****************************************************************************/
-struct pcsc_context *
+static struct pcsc_context *
 get_pcsc_context_by_app_context(struct pcsc_uds_client *uds_client,
                                 tui32 app_context)
 {
@@ -167,6 +166,37 @@ get_pcsc_context_by_app_context(struct pcsc_uds_client *uds_client,
         rv = (struct pcsc_context *)
              list_get_item(uds_client->contexts, index);
         if (rv->app_context == app_context)
+        {
+            return rv;
+        }
+    }
+    return 0;
+}
+
+/*****************************************************************************/
+static struct pcsc_context *
+get_pcsc_context_by_rdp_context(struct pcsc_uds_client *uds_client,
+                                const struct redir_scardcontext *context)
+{
+    struct pcsc_context *rv;
+    int index;
+
+    if (uds_client == 0)
+    {
+        return 0;
+    }
+    if (uds_client->contexts == 0)
+    {
+        return 0;
+    }
+    for (index = 0; index < uds_client->contexts->count; index++)
+    {
+        rv = (struct pcsc_context *)
+             list_get_item(uds_client->contexts, index);
+        if (rv->context.cbContext == context->cbContext &&
+                memcmp(rv->context.pbContext,
+                       context->pbContext,
+                       context->cbContext) == 0)
         {
             return rv;
         }
@@ -264,10 +294,11 @@ free_uds_client(struct pcsc_uds_client *uds_client)
                     }
                     list_delete(context->cards);
                 }
-                LOG_DEVEL(LOG_LEVEL_DEBUG, "  left over context %p", context->context);
-                scard_send_cancel(0, context->context, context->context_bytes);
-                scard_send_release_context(0, context->context,
-                                           context->context_bytes);
+                LOG_DEVEL(LOG_LEVEL_DEBUG, "  left over context %p",
+                          context->context.pbContext);
+                scard_send_cancel(0, &context->context);
+                scard_send_release_context(0, context->context.pbContext,
+                                           context->context.cbContext);
                 g_free(context);
             }
         }
@@ -284,7 +315,7 @@ free_uds_client(struct pcsc_uds_client *uds_client)
  */
 static struct pcsc_context *
 uds_client_add_context(struct pcsc_uds_client *uds_client,
-                       char *context, int context_bytes)
+                       const struct redir_scardcontext *Context)
 {
     struct pcsc_context *pcscContext;
 
@@ -299,8 +330,7 @@ uds_client_add_context(struct pcsc_uds_client *uds_client,
     }
     g_autoinc++;
     pcscContext->app_context = g_autoinc;
-    pcscContext->context_bytes = context_bytes;
-    g_memcpy(pcscContext->context, context, context_bytes);
+    pcscContext->context = *Context;
     if (uds_client->contexts == 0)
     {
         uds_client->contexts = list_create();
@@ -444,6 +474,28 @@ scard_pcsc_check_wait_objs(void)
 }
 
 /*****************************************************************************/
+/* Global interface to uds_client_add_context() */
+int scard_alloc_new_app_context(int uds_client_id,
+                                const struct redir_scardcontext *context,
+                                unsigned int *app_context)
+{
+    int rv = 1;
+    struct pcsc_uds_client *uds_client;
+
+    if ((uds_client = get_uds_client_by_id(uds_client_id)) != NULL)
+    {
+        struct pcsc_context *lcontext;
+        lcontext = uds_client_add_context(uds_client, context);
+        if (lcontext != NULL)
+        {
+            *app_context = lcontext->app_context;
+            rv = 0;
+        }
+    }
+    return rv;
+}
+
+/*****************************************************************************/
 /* returns error */
 int
 scard_process_establish_context(struct trans *con, struct stream *in_s)
@@ -500,9 +552,8 @@ scard_function_establish_context_return(void *user_data,
     int bytes;
     int uds_client_id;
     int return_code = XSCARD_E_UNEXPECTED;
-    unsigned int context_bytes;
+    struct redir_scardcontext context;
     int app_context = 0;
-    char context[16] = {0};
     struct stream *out_s;
     struct pcsc_uds_client *uds_client;
     struct trans *con;
@@ -533,24 +584,23 @@ scard_function_establish_context_return(void *user_data,
             in_uint32_le(in_s, return_code);
             in_uint8s(in_s, 4); // Context.cbContext
             in_uint8s(in_s, 4); // Context.pbContext Referent Identifier
-            in_uint32_le(in_s, context_bytes);
-            if (context_bytes > sizeof(context))
+            in_uint32_le(in_s, context.cbContext);
+            if (context.cbContext > sizeof(context.pbContext))
             {
                 LOG(LOG_LEVEL_ERROR, "scard_function_establish_context_return:"
-                    " opps context_bytes %u", context_bytes);
-                LOG_DEVEL_HEXDUMP(LOG_LEVEL_TRACE, "", in_s->p, context_bytes);
-                context_bytes = sizeof(context);
+                    " opps context_bytes %u", context.cbContext);
+                LOG_DEVEL_HEXDUMP(LOG_LEVEL_TRACE, "", in_s->p, context.cbContext);
+                context.cbContext = sizeof(context.pbContext);
             }
-            if (s_check_rem_and_log(in_s, context_bytes,
+            if (s_check_rem_and_log(in_s, context.cbContext,
                                     "[MS-RDPESC] REDIR_SCARD_CONTEXT(1)"))
             {
-                in_uint8a(in_s, context, context_bytes);
+                in_uint8a(in_s, context.pbContext, context.cbContext);
             }
         }
         if (return_code == XSCARD_S_SUCCESS)
         {
-            lcontext = uds_client_add_context(uds_client,
-                                              context, context_bytes);
+            lcontext = uds_client_add_context(uds_client, &context);
             app_context = lcontext->app_context;
         }
         LOG_DEVEL(LOG_LEVEL_DEBUG,
@@ -571,6 +621,27 @@ scard_function_establish_context_return(void *user_data,
     out_uint32_le(out_s, bytes - 8);
     out_uint32_le(out_s, SCARD_ESTABLISH_CONTEXT);
     return trans_force_write(con);
+}
+
+/*****************************************************************************/
+/* Global interface to uds_client_remove_context() */
+int scard_free_app_context(int uds_client_id,
+                           const struct redir_scardcontext *context)
+{
+    int rv = 1;
+    struct pcsc_uds_client *uds_client;
+
+    if ((uds_client = get_uds_client_by_id(uds_client_id)) != NULL)
+    {
+        struct pcsc_context *lcontext;
+        lcontext = get_pcsc_context_by_rdp_context(uds_client, context);
+        if (lcontext != NULL)
+        {
+            rv = uds_client_remove_context(uds_client, lcontext);
+        }
+    }
+
+    return rv;
 }
 
 /*****************************************************************************/
@@ -595,8 +666,8 @@ scard_process_release_context(struct trans *con, struct stream *in_s)
             "get_pcsc_context_by_app_context failed");
         return 1;
     }
-    scard_send_release_context(user_data, lcontext->context,
-                               lcontext->context_bytes);
+    scard_send_release_context(user_data, lcontext->context.pbContext,
+                               lcontext->context.cbContext);
     uds_client_remove_context(uds_client, lcontext);
     return 0;
 }
@@ -696,8 +767,8 @@ scard_process_list_readers(struct trans *con, struct stream *in_s)
     pcscListReaders = g_new0(struct pcsc_list_readers, 1);
     pcscListReaders->uds_client_id = uds_client->uds_client_id;
     pcscListReaders->cchReaders = cchReaders;
-    scard_send_list_readers(pcscListReaders, lcontext->context,
-                            lcontext->context_bytes, groups, cchReaders);
+    scard_send_list_readers(pcscListReaders, lcontext->context.pbContext,
+                            lcontext->context.cbContext, groups, cchReaders);
     return 0;
 }
 
@@ -882,7 +953,8 @@ scard_process_connect(struct trans *con, struct stream *in_s)
         return 1;
     }
     uds_client->connect_context = lcontext;
-    scard_send_connect(user_data, lcontext->context, lcontext->context_bytes,
+    scard_send_connect(user_data,
+                       lcontext->context.pbContext, lcontext->context.cbContext,
                        1, &rs);
     return 0;
 }
@@ -979,8 +1051,8 @@ scard_process_disconnect(struct trans *con, struct stream *in_s)
             "get_pcsc_card_by_app_card failed");
         return 1;
     }
-    scard_send_disconnect(user_data,
-                          lcontext->context, lcontext->context_bytes,
+    scard_send_disconnect(user_data, lcontext->context.pbContext,
+                          lcontext->context.cbContext,
                           lcard->card, lcard->card_bytes, dwDisposition);
     return 0;
 }
@@ -1049,7 +1121,8 @@ scard_process_begin_transaction(struct trans *con, struct stream *in_s)
         return 1;
     }
     scard_send_begin_transaction(user_data,
-                                 lcontext->context, lcontext->context_bytes,
+                                 lcontext->context.pbContext,
+                                 lcontext->context.cbContext,
                                  lcard->card, lcard->card_bytes);
     return 0;
 }
@@ -1121,7 +1194,8 @@ scard_process_end_transaction(struct trans *con, struct stream *in_s)
         return 1;
     }
     scard_send_end_transaction(user_data,
-                               lcontext->context, lcontext->context_bytes,
+                               lcontext->context.pbContext,
+                               lcontext->context.cbContext,
                                lcard->card, lcard->card_bytes,
                                dwDisposition);
     return 0;
@@ -1238,7 +1312,8 @@ scard_process_transmit(struct trans *con, struct stream *in_s)
     pcscTransmit->cbRecvLength = recv_bytes;
 
     scard_send_transmit(pcscTransmit,
-                        lcontext->context, lcontext->context_bytes,
+                        lcontext->context.pbContext,
+                        lcontext->context.cbContext,
                         lcard->card, lcard->card_bytes,
                         send_data, send_bytes, recv_bytes,
                         &send_ior, &recv_ior);
@@ -1361,7 +1436,8 @@ scard_process_control(struct trans *con, struct stream *in_s)
             "get_pcsc_card_by_app_card failed");
         return 1;
     }
-    scard_send_control(user_data, lcontext->context, lcontext->context_bytes,
+    scard_send_control(user_data, lcontext->context.pbContext,
+                       lcontext->context.cbContext,
                        lcard->card, lcard->card_bytes,
                        send_data, send_bytes, recv_bytes,
                        control_code);
@@ -1463,7 +1539,8 @@ scard_process_status(struct trans *con, struct stream *in_s)
     pcscStatus->uds_client_id = uds_client->uds_client_id;
     pcscStatus->cchReaderLen = cchReaderLen;
     scard_send_status(pcscStatus, 1,
-                      lcontext->context, lcontext->context_bytes,
+                      lcontext->context.pbContext,
+                      lcontext->context.cbContext,
                       lcard->card, lcard->card_bytes,
                       cchReaderLen, cbAtrLen);
 
@@ -1676,7 +1753,8 @@ scard_process_get_status_change(struct trans *con, struct stream *in_s)
         return 1;
     }
     scard_send_get_status_change(user_data,
-                                 lcontext->context, lcontext->context_bytes,
+                                 lcontext->context.pbContext,
+                                 lcontext->context.cbContext,
                                  1, dwTimeout, cReaders, rsa);
     g_free(rsa);
 
@@ -1779,7 +1857,7 @@ scard_process_cancel(struct trans *con, struct stream *in_s)
             "get_pcsc_context_by_app_context failed");
         return 1;
     }
-    scard_send_cancel(user_data, lcontext->context, lcontext->context_bytes);
+    scard_send_cancel(user_data, &lcontext->context);
     return 0;
 }
 

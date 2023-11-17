@@ -146,7 +146,7 @@ static void scard_send_EstablishContext(IRP *irp, int scope);
 static void scard_send_ReleaseContext(IRP *irp,
                                       char *context, int context_bytes);
 static void scard_send_IsContextValid(IRP *irp,
-                                      char *context, int context_bytes);
+                                      const struct redir_scardcontext *context);
 static void scard_send_ListReaders(IRP *irp,
                                    char *context, int context_bytes,
                                    char *groups, int cchReaders);
@@ -189,7 +189,8 @@ static int scard_send_Control(IRP *irp, char *context, int context_bytes,
                               char *card, int card_bytes,
                               char *send_data, int send_bytes,
                               int recv_bytes, int control_code);
-static int scard_send_Cancel(IRP *irp, char *context, int context_bytes);
+static int scard_send_Cancel(IRP *irp,
+                             const struct redir_scardcontext *context);
 static int scard_send_GetAttrib(IRP *irp, char *card, int card_bytes,
                                 READER_STATE *rs);
 
@@ -398,7 +399,8 @@ scard_send_release_context(void *user_data,
  * Checks if a previously established context is still valid
  *****************************************************************************/
 int
-scard_send_is_valid_context(void *user_data, char *context, int context_bytes)
+scard_send_is_valid_context(void *call_data,
+                            const struct redir_scardcontext *context)
 {
     IRP *irp;
 
@@ -413,10 +415,10 @@ scard_send_is_valid_context(void *user_data, char *context, int context_bytes)
     irp->CompletionId = g_completion_id++;
     irp->DeviceId = g_device_id;
     irp->callback = scard_handle_IsContextValid_Return;
-    irp->user_data = user_data;
+    irp->user_data = call_data;
 
     /* send IRP to client */
-    scard_send_IsContextValid(irp, context, context_bytes);
+    scard_send_IsContextValid(irp, context);
 
     return 0;
 }
@@ -459,7 +461,7 @@ scard_send_list_readers(void *user_data, char *context, int context_bytes,
  * @param  rsa          array of READER_STATEs
  *****************************************************************************/
 int
-scard_send_get_status_change(void *user_data, char *context, int context_bytes,
+scard_send_get_status_change(void *call_data, char *context, int context_bytes,
                              int wide, tui32 timeout, tui32 num_readers,
                              READER_STATE *rsa)
 {
@@ -476,7 +478,7 @@ scard_send_get_status_change(void *user_data, char *context, int context_bytes,
     irp->CompletionId = g_completion_id++;
     irp->DeviceId = g_device_id;
     irp->callback = scard_handle_GetStatusChange_Return;
-    irp->user_data = user_data;
+    irp->user_data = call_data;
 
     /* send IRP to client */
     scard_send_GetStatusChange(irp, context, context_bytes, wide, timeout,
@@ -492,7 +494,7 @@ scard_send_get_status_change(void *user_data, char *context, int context_bytes,
  * @param  wide  TRUE if unicode string
  *****************************************************************************/
 int
-scard_send_connect(void *user_data, char *context, int context_bytes,
+scard_send_connect(void *call_data, char *context, int context_bytes,
                    int wide, READER_STATE *rs)
 {
     IRP *irp;
@@ -508,7 +510,7 @@ scard_send_connect(void *user_data, char *context, int context_bytes,
     irp->CompletionId = g_completion_id++;
     irp->DeviceId = g_device_id;
     irp->callback = scard_handle_Connect_Return;
-    irp->user_data = user_data;
+    irp->user_data = call_data;
 
     /* send IRP to client */
     scard_send_Connect(irp, context, context_bytes, wide, rs);
@@ -528,7 +530,7 @@ scard_send_connect(void *user_data, char *context, int context_bytes,
  *                        rs.init_type
  *****************************************************************************/
 int
-scard_send_reconnect(void *user_data, char *context, int context_bytes,
+scard_send_reconnect(void *call_data, char *context, int context_bytes,
                      char *card, int card_bytes, READER_STATE *rs)
 {
     IRP *irp;
@@ -544,7 +546,7 @@ scard_send_reconnect(void *user_data, char *context, int context_bytes,
     irp->CompletionId = g_completion_id++;
     irp->DeviceId = g_device_id;
     irp->callback = scard_handle_Reconnect_Return;
-    irp->user_data = user_data;
+    irp->user_data = call_data;
 
     /* send IRP to client */
     scard_send_Reconnect(irp, context, context_bytes, card, card_bytes, rs);
@@ -559,7 +561,7 @@ scard_send_reconnect(void *user_data, char *context, int context_bytes,
  * @param  con   connection to client
  *****************************************************************************/
 int
-scard_send_begin_transaction(void *user_data, char *context, int context_bytes,
+scard_send_begin_transaction(void *call_data, char *context, int context_bytes,
                              char *card, int card_bytes)
 {
     IRP *irp;
@@ -575,7 +577,7 @@ scard_send_begin_transaction(void *user_data, char *context, int context_bytes,
     irp->CompletionId = g_completion_id++;
     irp->DeviceId = g_device_id;
     irp->callback = scard_handle_BeginTransaction_Return;
-    irp->user_data = user_data;
+    irp->user_data = call_data;
 
     /* send IRP to client */
     scard_send_BeginTransaction(irp, context, context_bytes, card, card_bytes);
@@ -591,7 +593,7 @@ scard_send_begin_transaction(void *user_data, char *context, int context_bytes,
  * @param  sc_handle  handle to smartcard
  *****************************************************************************/
 int
-scard_send_end_transaction(void *user_data, char *context, int context_bytes,
+scard_send_end_transaction(void *call_data, char *context, int context_bytes,
                            char *card, int card_bytes,
                            tui32 dwDisposition)
 {
@@ -608,7 +610,7 @@ scard_send_end_transaction(void *user_data, char *context, int context_bytes,
     irp->CompletionId = g_completion_id++;
     irp->DeviceId = g_device_id;
     irp->callback = scard_handle_EndTransaction_Return;
-    irp->user_data = user_data;
+    irp->user_data = call_data;
 
     /* send IRP to client */
     scard_send_EndTransaction(irp, context, context_bytes,
@@ -624,7 +626,7 @@ scard_send_end_transaction(void *user_data, char *context, int context_bytes,
  * @param  wide  TRUE if unicode string
  *****************************************************************************/
 int
-scard_send_status(void *user_data, int wide, char *context, int context_bytes,
+scard_send_status(void *call_data, int wide, char *context, int context_bytes,
                   char *card, int card_bytes,
                   int cchReaderLen, int cbAtrLen)
 {
@@ -641,7 +643,7 @@ scard_send_status(void *user_data, int wide, char *context, int context_bytes,
     irp->CompletionId = g_completion_id++;
     irp->DeviceId = g_device_id;
     irp->callback = scard_handle_Status_Return;
-    irp->user_data = user_data;
+    irp->user_data = call_data;
 
     /* send IRP to client */
     scard_send_Status(irp, wide, context, context_bytes, card, card_bytes,
@@ -657,7 +659,7 @@ scard_send_status(void *user_data, int wide, char *context, int context_bytes,
  * @param  sc_handle  handle to smartcard
  *****************************************************************************/
 int
-scard_send_disconnect(void *user_data, char *context, int context_bytes,
+scard_send_disconnect(void *call_data, char *context, int context_bytes,
                       char *card, int card_bytes, int dwDisposition)
 {
     IRP *irp;
@@ -673,7 +675,7 @@ scard_send_disconnect(void *user_data, char *context, int context_bytes,
     irp->CompletionId = g_completion_id++;
     irp->DeviceId = g_device_id;
     irp->callback = scard_handle_Disconnect_Return;
-    irp->user_data = user_data;
+    irp->user_data = call_data;
 
     /* send IRP to client */
     scard_send_Disconnect(irp, context, context_bytes,
@@ -687,7 +689,7 @@ scard_send_disconnect(void *user_data, char *context, int context_bytes,
  * associated with a valid context.
  *****************************************************************************/
 int
-scard_send_transmit(void *user_data, char *context, int context_bytes,
+scard_send_transmit(void *call_data, char *context, int context_bytes,
                     char *card, int card_bytes,
                     char *send_data, int send_bytes, int recv_bytes,
                     struct xrdp_scard_io_request *send_ior,
@@ -706,7 +708,7 @@ scard_send_transmit(void *user_data, char *context, int context_bytes,
     irp->CompletionId = g_completion_id++;
     irp->DeviceId = g_device_id;
     irp->callback = scard_handle_Transmit_Return;
-    irp->user_data = user_data;
+    irp->user_data = call_data;
 
     /* send IRP to client */
     scard_send_Transmit(irp, context, context_bytes, card, card_bytes,
@@ -720,7 +722,7 @@ scard_send_transmit(void *user_data, char *context, int context_bytes,
  * Communicate directly with the smart card reader
  *****************************************************************************/
 int
-scard_send_control(void *user_data, char *context, int context_bytes,
+scard_send_control(void *call_data, char *context, int context_bytes,
                    char *card, int card_bytes,
                    char *send_data, int send_bytes,
                    int recv_bytes, int control_code)
@@ -738,7 +740,7 @@ scard_send_control(void *user_data, char *context, int context_bytes,
     irp->CompletionId = g_completion_id++;
     irp->DeviceId = g_device_id;
     irp->callback = scard_handle_Control_Return;
-    irp->user_data = user_data;
+    irp->user_data = call_data;
 
     /* send IRP to client */
     scard_send_Control(irp, context, context_bytes,
@@ -753,7 +755,7 @@ scard_send_control(void *user_data, char *context, int context_bytes,
  * Cancel any outstanding calls
  *****************************************************************************/
 int
-scard_send_cancel(void *user_data, char *context, int context_bytes)
+scard_send_cancel(void *call_data, const struct redir_scardcontext *context)
 {
     IRP *irp;
 
@@ -768,10 +770,10 @@ scard_send_cancel(void *user_data, char *context, int context_bytes)
     irp->CompletionId = g_completion_id++;
     irp->DeviceId = g_device_id;
     irp->callback = scard_handle_Cancel_Return;
-    irp->user_data = user_data;
+    irp->user_data = call_data;
 
     /* send IRP to client */
-    scard_send_Cancel(irp, context, context_bytes);
+    scard_send_Cancel(irp, context);
 
     return 0;
 }
@@ -780,7 +782,7 @@ scard_send_cancel(void *user_data, char *context, int context_bytes)
  * Get reader attributes
  *****************************************************************************/
 int
-scard_send_get_attrib(void *user_data, char *card, int card_bytes,
+scard_send_get_attrib(void *call_data, char *card, int card_bytes,
                       READER_STATE *rs)
 {
     IRP *irp;
@@ -796,7 +798,7 @@ scard_send_get_attrib(void *user_data, char *card, int card_bytes,
     irp->CompletionId = g_completion_id++;
     irp->DeviceId = g_device_id;
     irp->callback = scard_handle_GetAttrib_Return;
-    irp->user_data = user_data;
+    irp->user_data = call_data;
 
     /* send IRP to client */
     scard_send_GetAttrib(irp, card, card_bytes, rs);
@@ -1065,7 +1067,7 @@ scard_send_ReleaseContext(IRP *irp, char *context, int context_bytes)
  * Checks if a previously established context is still valid
  *****************************************************************************/
 static void
-scard_send_IsContextValid(IRP *irp, char *context, int context_bytes)
+scard_send_IsContextValid(IRP *irp, const struct redir_scardcontext *context)
 {
     /* see [MS-RDPESC] 3.1.4.3 */
 
@@ -1100,8 +1102,8 @@ scard_send_IsContextValid(IRP *irp, char *context, int context_bytes)
     s_push_layer(s, mcs_hdr, 4); /* bytes, set later */
 
     /* insert context */
-    out_uint32_le(s, context_bytes);
-    out_uint8a(s, context, context_bytes);
+    out_uint32_le(s, context->cbContext);
+    out_uint8a(s, context->pbContext, context->cbContext);
 
     s_mark_end(s);
 
@@ -2217,7 +2219,7 @@ scard_send_Control(IRP *irp, char *context, int context_bytes,
  * Cancel any outstanding calls
  *****************************************************************************/
 static int
-scard_send_Cancel(IRP *irp, char *context, int context_bytes)
+scard_send_Cancel(IRP *irp, const struct redir_scardcontext *context)
 {
     /* see [MS-RDPESC] 3.1.4.27 */
 
@@ -2239,10 +2241,10 @@ scard_send_Cancel(IRP *irp, char *context, int context_bytes)
 
     s_push_layer(s, mcs_hdr, 4); /* bytes, set later */
     out_uint32_le(s, 0x00000000);
-    out_uint32_le(s, context_bytes);
+    out_uint32_le(s, context->cbContext);
     out_uint32_le(s, 0x00020000);
-    out_uint32_le(s, context_bytes);
-    out_uint8a(s, context, context_bytes);
+    out_uint32_le(s, context->cbContext);
+    out_uint8a(s, context->pbContext, context->cbContext);
 
     s_mark_end(s);
 
