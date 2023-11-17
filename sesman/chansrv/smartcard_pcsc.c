@@ -496,131 +496,74 @@ int scard_alloc_new_app_context(int uds_client_id,
 }
 
 /*****************************************************************************/
-/* returns error */
-int
-scard_process_establish_context(struct trans *con, struct stream *in_s)
+static int
+send_establish_context_return(int uds_client_id,
+                              unsigned int ReturnCode,
+                              unsigned int app_context)
 {
-    int dwScope;
     struct pcsc_uds_client *uds_client;
-    void *user_data;
 
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_establish_context:");
-    uds_client = (struct pcsc_uds_client *) (con->callback_data);
-    in_uint32_le(in_s, dwScope);
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_establish_context: dwScope 0x%8.8x", dwScope);
-    user_data = (void *) (tintptr) (uds_client->uds_client_id);
-    scard_send_establish_context(user_data, dwScope);
-    return 0;
+    if ((uds_client = get_uds_client_by_id(uds_client_id)) == NULL)
+    {
+        LOG(LOG_LEVEL_ERROR, "send_establish_context_return: "
+            "get_uds_client_by_id failed to find uds_client_id %d",
+            uds_client_id);
+        return 1;
+    }
+    struct trans *con = uds_client->con;
+
+    struct stream *out_s = trans_get_out_s(con, 64);
+    if (out_s == NULL)
+    {
+        return 1;
+    }
+
+    s_push_layer(out_s, iso_hdr, 8);
+    out_uint32_le(out_s, ReturnCode);
+    out_uint32_le(out_s, app_context);
+    s_mark_end(out_s);
+    unsigned int bytes = (unsigned int) (out_s->end - out_s->data);
+    s_pop_layer(out_s, iso_hdr);
+    out_uint32_le(out_s, bytes - 8);
+    out_uint32_le(out_s, SCARD_ESTABLISH_CONTEXT);
+    return trans_force_write(con);
 }
 
 /*****************************************************************************/
 /* returns error */
 int
-scard_function_establish_context_return(void *user_data,
-                                        struct stream *in_s,
-                                        int len, int status)
+scard_process_establish_context(struct trans *con, struct stream *in_s)
 {
-    /* see [MS-RDPESC] 2.2.3.2
-     *
-     * IDL:-
-     *
-     * typedef struct _REDIR_SCARDCONTEXT {
-     *    [range(0,16)] unsigned long cbContext;
-     *    [unique] [size_is(cbContext)] byte *pbContext;
-     *    } REDIR_SCARDCONTEXT;
-     *
-     * typedef struct _EstablishContext_Return {
-     *     long ReturnCode;
-     *     REDIR_SCARDCONTEXT Context;
-     *     } EstablishContext_Return;
-     *
-     * Type summary:-
-     *
-     * ReturnCode         32-bit word
-     * Context.cbContext  Unsigned 32-bit word
-     * Context.pbContext  Embedded full pointer to conformant array of bytes
-     *
-     * NDR:-
-     *
-     * Offset   Decription
-     * 0        ReturnCode
-     * 4        Context.cbContext
-     * 8        Context.pbContext Referent Identifier
-     * 12       length of context in bytes
-     * 16       Context data (up to 16 bytes)
-     */
-    int bytes;
-    int uds_client_id;
-    int return_code = XSCARD_E_UNEXPECTED;
-    struct redir_scardcontext context;
-    int app_context = 0;
-    struct stream *out_s;
     struct pcsc_uds_client *uds_client;
-    struct trans *con;
-    struct pcsc_context *lcontext = NULL;
+    int uds_client_id;
+    struct establish_context_call *call_data;
 
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_function_establish_context_return:");
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "  status 0x%8.8x", status);
-    uds_client_id = (int) (tintptr) user_data;
-    uds_client = (struct pcsc_uds_client *)
-                 get_uds_client_by_id(uds_client_id);
-    if (uds_client == 0)
-    {
-        LOG(LOG_LEVEL_ERROR, "scard_function_establish_context_return: "
-            "get_uds_client_by_id failed to find uds_client_id %d",
-            uds_client_id);
-        return 1;
-    }
-    con = uds_client->con;
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_establish_context:");
+    uds_client = (struct pcsc_uds_client *) (con->callback_data);
+    uds_client_id = uds_client->uds_client_id;
 
-    if (status == 0)
+    if (!s_check_rem_and_log(in_s, 4, "Reading SCARD_ESTABLISH_CONTEXT"))
     {
-        if (s_check_rem_and_log(in_s, 8 + 8 + 4 + 4 + 4 + 4,
-                                "[MS-RDPESC] REDIR_SCARD_CONTEXT(1)"))
-        {
-            in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.1 */
-            in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.2 */
+        return send_establish_context_return(uds_client_id,
+                                             XSCARD_F_INTERNAL_ERROR, 0);
+    }
 
-            in_uint32_le(in_s, return_code);
-            in_uint8s(in_s, 4); // Context.cbContext
-            in_uint8s(in_s, 4); // Context.pbContext Referent Identifier
-            in_uint32_le(in_s, context.cbContext);
-            if (context.cbContext > sizeof(context.pbContext))
-            {
-                LOG(LOG_LEVEL_ERROR, "scard_function_establish_context_return:"
-                    " opps context_bytes %u", context.cbContext);
-                LOG_DEVEL_HEXDUMP(LOG_LEVEL_TRACE, "", in_s->p, context.cbContext);
-                context.cbContext = sizeof(context.pbContext);
-            }
-            if (s_check_rem_and_log(in_s, context.cbContext,
-                                    "[MS-RDPESC] REDIR_SCARD_CONTEXT(1)"))
-            {
-                in_uint8a(in_s, context.pbContext, context.cbContext);
-            }
-        }
-        if (return_code == XSCARD_S_SUCCESS)
-        {
-            lcontext = uds_client_add_context(uds_client, &context);
-            app_context = lcontext->app_context;
-        }
-        LOG_DEVEL(LOG_LEVEL_DEBUG,
-                  "scard_function_establish_context_return: "
-                  "result %d app_context %d", return_code, app_context);
-    }
-    out_s = trans_get_out_s(con, 8192);
-    if (out_s == NULL)
+    /* Allocate a block to describe the call */
+    if ((call_data = g_new0(struct establish_context_call, 1)) == NULL)
     {
-        return 1;
+        return send_establish_context_return(uds_client_id,
+                                             XSCARD_E_NO_MEMORY, 0);
     }
-    s_push_layer(out_s, iso_hdr, 8);
-    out_uint32_le(out_s, app_context);
-    out_uint32_le(out_s, return_code);
-    s_mark_end(out_s);
-    bytes = (int) (out_s->end - out_s->data);
-    s_pop_layer(out_s, iso_hdr);
-    out_uint32_le(out_s, bytes - 8);
-    out_uint32_le(out_s, SCARD_ESTABLISH_CONTEXT);
-    return trans_force_write(con);
+
+    call_data->uds_client_id = uds_client_id;
+    call_data->callback = send_establish_context_return;
+    in_uint32_le(in_s, call_data->dwScope);
+
+    LOG_DEVEL(LOG_LEVEL_DEBUG,
+              "scard_process_establish_context: dwScope 0x%8.8x",
+              call_data->dwScope);
+    scard_send_establish_context(call_data);
+    return 0;
 }
 
 /*****************************************************************************/

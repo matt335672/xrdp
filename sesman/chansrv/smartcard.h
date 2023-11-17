@@ -92,12 +92,34 @@ struct redir_scardcontext  /* 2.2.1.1 */
     char pbContext[16];
 };
 
+struct establish_context_call
+{
+    /** Client making this call */
+    int uds_client_id;
+
+    /** How to pass the result back to the client */
+    int (*callback)(int uds_client_id,
+                    unsigned int ReturnCode,
+                    unsigned int app_context);
+
+    /* See 2.2.2.1 */
+    unsigned int dwScope;
+};
+
 void scard_device_announce(tui32 device_id);
 int  scard_get_wait_objs(tbus *objs, int *count, int *timeout);
 int  scard_check_wait_objs(void);
 int  scard_init(void);
 int  scard_deinit(void);
-int  scard_send_establish_context(void *user_data, int scope);
+/**
+ * Sends an establish_context call to the RDP client
+ *
+ * @param call_data Info about the call
+ *
+ * The call_data must be on the heap. After this call,
+ * ownership of the call_data is taken away from the caller.
+ */
+void scard_send_establish_context(struct establish_context_call *call_data);
 int  scard_send_release_context(void *user_data,
                                 char *context, int context_bytes);
 int  scard_send_is_valid_context(void *user_data,

@@ -142,7 +142,9 @@ static struct stream *scard_make_new_ioctl(IRP *irp, tui32 ioctl,
 static int  scard_add_new_device(tui32 device_id);
 static int  scard_get_free_slot(void);
 static void scard_release_resources(void);
-static void scard_send_EstablishContext(IRP *irp, int scope);
+static void
+scard_send_EstablishContext(struct stream *s,
+                            struct establish_context_call *call_data);
 static void scard_send_ReleaseContext(IRP *irp,
                                       char *context, int context_bytes);
 static void scard_send_IsContextValid(IRP *irp,
@@ -343,28 +345,43 @@ scard_deinit(void)
 /**
  *
  *****************************************************************************/
-int
-scard_send_establish_context(void *user_data, int scope)
+void
+scard_send_establish_context(struct establish_context_call *call_data)
 {
     IRP *irp;
+    struct stream *s;
 
     /* setup up IRP */
     if ((irp = devredir_irp_new()) == NULL)
     {
         LOG_DEVEL(LOG_LEVEL_ERROR, "system out of memory");
-        return 1;
+        call_data->callback(call_data->uds_client_id, XSCARD_E_NO_MEMORY, 0);
+        free(call_data);
     }
+    else
+    {
+        irp->scard_index = g_scard_index;
+        irp->CompletionId = g_completion_id++;
+        irp->DeviceId = g_device_id;
+        irp->callback = scard_handle_EstablishContext_Return;
+        /* Pass ownership of the call_data to the IRP */
+        irp->user_data = call_data;
+        irp->extra_destructor = devredir_irp_free_user_data;
 
-    irp->scard_index = g_scard_index;
-    irp->CompletionId = g_completion_id++;
-    irp->DeviceId = g_device_id;
-    irp->callback = scard_handle_EstablishContext_Return;
-    irp->user_data = user_data;
-
-    /* send IRP to client */
-    scard_send_EstablishContext(irp, scope);
-
-    return 0;
+        s = scard_make_new_ioctl(irp, SCARD_IOCTL_ESTABLISH_CONTEXT, 64);
+        if (s == NULL)
+        {
+            LOG_DEVEL(LOG_LEVEL_ERROR, "scard_make_new_ioctl failed");
+            call_data->callback(call_data->uds_client_id,
+                                XSCARD_E_NO_MEMORY, 0);
+            devredir_irp_delete(irp);
+        }
+        else
+        {
+            /* send IRP to client */
+            scard_send_EstablishContext(s, call_data);
+        }
+    }
 }
 
 /**
@@ -973,23 +990,17 @@ align_s(struct stream *s, unsigned int boundary)
  *
  *****************************************************************************/
 static void
-scard_send_EstablishContext(IRP *irp, int scope)
+scard_send_EstablishContext(struct stream *s,
+                            struct establish_context_call *call_data)
 {
-    struct stream *s;
     int            bytes;
-
-    if ((s = scard_make_new_ioctl(irp, SCARD_IOCTL_ESTABLISH_CONTEXT, 4096)) == NULL)
-    {
-        LOG_DEVEL(LOG_LEVEL_ERROR, "scard_make_new_ioctl failed");
-        return;
-    }
 
     /* Private Header ([MS-RPCE] 2.2.6.2 */
     s_push_layer(s, mcs_hdr, 4); /* bytes, set later */
     out_uint32_le(s, 0x00000000);
 
     /* [MS-RDPESC] 2.2.2.1 EstablishContext_Call */
-    out_uint32_le(s, scope);
+    out_uint32_le(s, call_data->dwScope);
 
     align_s(s, 8); // [MS-RPCE] 2.2.6.2 */
     s_mark_end(s);
@@ -2337,6 +2348,88 @@ scard_send_GetAttrib(IRP *irp, char *card, int card_bytes, READER_STATE *rs)
 **                                                                           **
 ******************************************************************************/
 
+/*****************************************************************************/
+/* returns error */
+static int
+scard_function_establish_context_return(
+    struct establish_context_call *call_data,
+    struct stream *in_s,
+    int len, int status)
+{
+    /* see [MS-RDPESC] 2.2.3.2
+     *
+     * IDL:-
+     *
+     * typedef struct _REDIR_SCARDCONTEXT {
+     *    [range(0,16)] unsigned long cbContext;
+     *    [unique] [size_is(cbContext)] byte *pbContext;
+     *    } REDIR_SCARDCONTEXT;
+     *
+     * typedef struct _EstablishContext_Return {
+     *     long ReturnCode;
+     *     REDIR_SCARDCONTEXT Context;
+     *     } EstablishContext_Return;
+     *
+     * Type summary:-
+     *
+     * ReturnCode         32-bit word
+     * Context.cbContext  Unsigned 32-bit word
+     * Context.pbContext  Embedded full pointer to conformant array of bytes
+     *
+     * NDR:-
+     *
+     * Offset   Decription
+     * 0        ReturnCode
+     * 4        Context.cbContext
+     * 8        Context.pbContext Referent Identifier
+     * 12       length of context in bytes
+     * 16       Context data (up to 16 bytes)
+     */
+    int uds_client_id;
+    int ReturnCode = XSCARD_E_UNEXPECTED;
+    struct redir_scardcontext Context = {0};
+    unsigned int app_context = 0;
+
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_function_establish_context_return:");
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "  status 0x%8.8x", status);
+    uds_client_id = call_data->uds_client_id;
+
+    if (status == 0)
+    {
+        if (s_check_rem_and_log(in_s, 8 + 8 + 4 + 4 + 4 + 4,
+                                "[MS-RDPESC] EstablishContext_Return(1)"))
+        {
+            in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.1 */
+            in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.2 */
+
+            in_uint32_le(in_s, ReturnCode);
+            in_uint32_le(in_s, Context.cbContext); // Context.cbContext
+            in_uint8s(in_s, 4); // Context.pbContext Referent Identifier
+            in_uint8s(in_s, 4); // Context.pbContext copy
+            if (Context.cbContext > sizeof(Context.pbContext))
+            {
+                LOG(LOG_LEVEL_ERROR, "scard_function_establish_context_return:"
+                    " opps context_bytes %u", Context.cbContext);
+                Context.cbContext =  sizeof(Context.pbContext);
+            }
+            if (s_check_rem_and_log(in_s, Context.cbContext,
+                                    "[MS-RDPESC] EstablishContext_Return(2)"))
+            {
+                in_uint8a(in_s, Context.pbContext, Context.cbContext);
+            }
+        }
+        if (ReturnCode == XSCARD_S_SUCCESS)
+        {
+            scard_alloc_new_app_context(uds_client_id, &Context, &app_context);
+        }
+        LOG_DEVEL(LOG_LEVEL_DEBUG,
+                  "scard_function_establish_context_return: "
+                  "result %d app_context %d", ReturnCode, app_context);
+    }
+
+    return call_data->callback(uds_client_id, ReturnCode, app_context);
+}
+
 /**
  *
  *****************************************************************************/
@@ -2356,9 +2449,10 @@ scard_handle_EstablishContext_Return(struct stream *s, IRP *irp,
     }
     /* get OutputBufferLen */
     xstream_rd_u32_le(s, len);
-    scard_function_establish_context_return(irp->user_data, s, len, IoStatus);
+    scard_function_establish_context_return(
+        (struct establish_context_call *)irp->user_data,
+        s, len, IoStatus);
     devredir_irp_delete(irp);
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "leaving");
 }
 
 /**
