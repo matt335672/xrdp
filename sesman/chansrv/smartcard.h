@@ -118,6 +118,30 @@ struct release_context_call
 
 };
 
+struct list_readers_call
+{
+    int uds_client_id;
+
+    /** How to pass the result back to the client */
+    int (*callback)(int uds_client_id,
+                    unsigned int ReturnCode,
+                    unsigned int cBytes,
+                    const char *msz);
+
+    /* See 2.2.2.4 */
+    struct redir_scardcontext Context;
+    unsigned int fmszReadersIsNULL;
+    unsigned int cchReaders;
+    unsigned int cBytes;
+#ifdef __cplusplus
+    char mszGroups[1];
+#else
+    char mszGroups[];
+#endif
+};
+
+
+
 void scard_device_announce(tui32 device_id);
 int  scard_get_wait_objs(tbus *objs, int *count, int *timeout);
 int  scard_check_wait_objs(void);
@@ -143,9 +167,16 @@ void scard_send_establish_context(struct establish_context_call *call_data);
 void scard_send_release_context(struct release_context_call *call_data);
 int  scard_send_is_valid_context(void *user_data,
                                  const struct redir_scardcontext *context);
-int  scard_send_list_readers(void *user_data,
-                             char *context, int context_bytes,
-                             char *groups, int cchReaders);
+/**
+ * Sends a list_readers call to the RDP client
+ *
+ * @param call_data Info about the call
+ *
+ * The call_data must be on the heap. After this call,
+ * ownership of the call_data is taken away from the caller.
+ */
+void
+scard_send_list_readers(struct list_readers_call *call_data);
 
 int  scard_send_get_status_change(void *user_data,
                                   char *context, int context_bytes,

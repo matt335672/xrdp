@@ -47,6 +47,7 @@
 #include "devredir.h"
 #include "smartcard_pcsc.h"
 #include "chansrv.h"
+#include "ms-rdpesc.h"
 
 /*
  * TODO
@@ -150,9 +151,9 @@ scard_send_ReleaseContext(struct stream *s,
                           struct release_context_call *call_data);
 static void scard_send_IsContextValid(IRP *irp,
                                       const struct redir_scardcontext *context);
-static void scard_send_ListReaders(IRP *irp,
-                                   char *context, int context_bytes,
-                                   char *groups, int cchReaders);
+static void
+scard_send_ListReaders(struct stream *s,
+                       struct list_readers_call *call_data);
 static void scard_send_GetStatusChange(IRP *irp,
                                        char *context, int context_bytes,
                                        int wide,
@@ -458,29 +459,51 @@ scard_send_is_valid_context(void *call_data,
 /**
  *
  *****************************************************************************/
-int
-scard_send_list_readers(void *user_data, char *context, int context_bytes,
-                        char *groups, int cchReaders)
+void
+scard_send_list_readers(struct list_readers_call *call_data)
 {
     IRP *irp;
+    struct stream *s;
 
     /* setup up IRP */
     if ((irp = devredir_irp_new()) == NULL)
     {
         LOG_DEVEL(LOG_LEVEL_ERROR, "system out of memory");
-        return 1;
+        call_data->callback(call_data->uds_client_id, XSCARD_E_NO_MEMORY,
+                            0, NULL);
+        free(call_data);
     }
-    irp->scard_index = g_scard_index;
-    irp->CompletionId = g_completion_id++;
-    irp->DeviceId = g_device_id;
-    irp->callback = scard_handle_ListReaders_Return;
-    irp->user_data = user_data;
+    else
+    {
+        unsigned int ioctl_size = 64;
+        if (call_data->cBytes > 0)
+        {
+            ioctl_size += 2 * utf8_as_utf16_word_count(call_data->mszGroups,
+                          call_data->cBytes);
+        }
 
-    /* send IRP to client */
-    scard_send_ListReaders(irp, context, context_bytes, groups,
-                           cchReaders);
+        irp->scard_index = g_scard_index;
+        irp->CompletionId = g_completion_id++;
+        irp->DeviceId = g_device_id;
+        irp->callback = scard_handle_ListReaders_Return;
+        /* Pass ownership of the call_data to the IRP */
+        irp->user_data = call_data;
+        irp->extra_destructor = devredir_irp_free_user_data;
 
-    return 0;
+        s = scard_make_new_ioctl(irp, SCARD_IOCTL_LIST_READERS_W, ioctl_size);
+        if (s == NULL)
+        {
+            LOG_DEVEL(LOG_LEVEL_ERROR, "scard_make_new_ioctl failed");
+            call_data->callback(call_data->uds_client_id,
+                                XSCARD_E_NO_MEMORY, 0, NULL);
+            devredir_irp_delete(irp);
+        }
+        else
+        {
+            /* send IRP to client */
+            scard_send_ListReaders(s, call_data);
+        }
+    }
 }
 
 /**
@@ -1142,8 +1165,8 @@ scard_send_IsContextValid(IRP *irp, const struct redir_scardcontext *context)
  *
  *****************************************************************************/
 static void
-scard_send_ListReaders(IRP *irp, char *context, int context_bytes,
-                       char *groups, int cchReaders)
+scard_send_ListReaders(struct stream *s,
+                       struct list_readers_call *call_data)
 {
     /* see [MS-RDPESC] 2.2.2.4
      *
@@ -1185,62 +1208,52 @@ scard_send_ListReaders(IRP *irp, char *context, int context_bytes,
      *
      */
 
-    SMARTCARD     *sc;
-    struct stream *s;
     int            bytes;
-    int            bytes_groups = 0; // Length of NDR for groups + 2 terminators
     int            val = 0;    // Referent Id for mszGroups (assume NULL)
-    int            groups_len = 0; // strlen(groups)
+    const char *mszGroups = call_data->mszGroups;
+    unsigned int cBytes = call_data->cBytes;
 
-    if ((sc = smartcards[irp->scard_index]) == NULL)
+    if (cBytes > 0)
     {
-        LOG_DEVEL(LOG_LEVEL_ERROR, "smartcards[%d] is NULL", irp->scard_index);
-        return;
-    }
-
-    if ((s = scard_make_new_ioctl(irp, SCARD_IOCTL_LIST_READERS_W, 4096)) == NULL)
-    {
-        LOG_DEVEL(LOG_LEVEL_ERROR, "scard_make_new_ioctl failed");
-        return;
-    }
-
-    if (groups != NULL && *groups != '\0')
-    {
-        groups_len = g_strlen(groups);
-        bytes_groups = (utf8_as_utf16_word_count(groups, groups_len) + 2) * 2;
+        // Get the length of the groups as a UTF-16 string
+        cBytes = utf8_as_utf16_word_count(mszGroups, cBytes) * 2;
         val = 0x00020004;
     }
 
+    /* Private Header ([MS-RPCE] 2.2.6.2 */
     s_push_layer(s, mcs_hdr, 4); /* bytes, set later */
     out_uint32_le(s, 0x00000000);
+
     // REDIR_SCARDCONTEXT Context;
-    out_uint32_le(s, context_bytes);
+    out_uint32_le(s, call_data->Context.cbContext);
     out_uint32_le(s, 0x00020000);
     // [range(0, 65536)] unsigned long cBytes;
-    out_uint32_le(s, bytes_groups);
+    out_uint32_le(s, cBytes);
     // [unique] [size_is(cBytes)] const byte *mszGroups; (pointer)
     out_uint32_le(s, val);
+    // We ignore the caller's settings of fmszReadersIsNULL and cchReaders
+    // for the call. The reason is we need the UTF-16 string anyway
+    // to work out how many bytes it will occupy when represented as UTF-8
+
     // long fmszReadersIsNULL;
-    out_uint32_le(s, 0x00000000);
+    out_uint32_le(s, 0x000000);
     // unsigned long cchReaders;
-    out_uint32_le(s, cchReaders);
+    out_uint32_le(s, SCARD_AUTOALLOCATE);
 
     // At the end of the struct come the pointed-to structures
 
     // Context field pbContext is a Uni-dimensional conformant array
-    out_uint32_le(s, context_bytes);
-    out_uint8a(s, context, context_bytes);
+    out_uint32_le(s, call_data->Context.cbContext);
+    out_uint8a(s, call_data->Context.pbContext, call_data->Context.cbContext);
 
     // mszGroups is also a Uni-dimensional conformant array of bytes
-    if (bytes_groups > 0)
+    if (cBytes > 0)
     {
         align_s(s, 4);
-        out_uint32_le(s, bytes_groups);
-        out_utf8_as_utf16_le(s, groups, groups_len);
-        out_uint16_le(s, 0);
-        out_uint16_le(s, 0);
+        out_uint32_le(s, cBytes);
+        out_utf8_as_utf16_le(s, mszGroups, cBytes);
     }
-
+    align_s(s, 8);
     s_mark_end(s);
 
     s_pop_layer(s, mcs_hdr);
@@ -2433,9 +2446,7 @@ scard_function_establish_context_return(
     return call_data->callback(uds_client_id, ReturnCode, app_context);
 }
 
-/**
- *
- *****************************************************************************/
+/*****************************************************************************/
 static void
 scard_handle_EstablishContext_Return(struct stream *s, IRP *irp,
                                      tui32 DeviceId, tui32 CompletionId,
@@ -2561,6 +2572,103 @@ scard_handle_IsContextValid_Return(struct stream *s, IRP *irp,
     LOG_DEVEL(LOG_LEVEL_DEBUG, "leaving");
 }
 
+/*****************************************************************************/
+static int
+scard_function_list_readers_return(
+    struct list_readers_call *call_data,
+    struct stream *in_s,
+    int len, int status)
+{
+    /* see [MS-RDPESC] 2.2.3.4
+     *
+     * IDL:-
+     *
+     * typedef struct _longAndMultiString_Return {
+     *     long ReturnCode;
+     *     [range(0,65536)] unsigned long cBytes;
+     *     [unique] [size_is(cBytes)] byte *msz;
+     *     } ListReaderGroups_Return, ListReaders_Return;
+     *
+     * Type summary:-
+     *
+     * ReturnCode         32-bit word
+     * CBytes             Unsigned 32-bit word
+     * msz                Embedded full pointer to conformant array of bytes
+     *
+     * NDR:-
+     *
+     * Offset   Decription
+     * 0        ReturnCode
+     * 4        cBytes
+     * 8        msz pointer Referent Identifier
+     * 12       length of multistring in bytes
+     * 16       Multistring data
+     */
+    int uds_client_id;
+    unsigned int ReturnCode = XSCARD_E_UNEXPECTED;
+    unsigned int utf8len = 0;
+    char *msz_readers = NULL;
+    int rv;
+
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_function_list_readers_return:");
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "  status 0x%8.8x", status);
+    uds_client_id = call_data->uds_client_id;
+
+    if (status == 0)
+    {
+        unsigned int cBytes = 0;
+
+        if (s_check_rem_and_log(in_s, 8 + 8 + 4 + 4 + 4 + 4,
+                                "[MS-RDPESC] ListReaders_return(1)"))
+        {
+            in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.1 */
+            in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.2 */
+
+            in_uint32_le(in_s, ReturnCode);
+            in_uint32_le(in_s, cBytes);
+            in_uint8s(in_s, 4); // msz pointer Referent Identifier
+            in_uint8s(in_s, 4); // copy of msz length
+            // Get the length of the required UTF-8 string
+            if (s_check_rem_and_log(in_s, cBytes,
+                                    "[MS-RDPESC] ListReaders_return(2)"))
+            {
+                utf8len = in_utf16_le_fixed_as_utf8_length(in_s, cBytes / 2);
+            }
+        }
+
+        // Now work out what the caller actually wanted
+        if (ReturnCode == XSCARD_S_SUCCESS)
+        {
+            if (call_data->fmszReadersIsNULL || call_data->cchReaders == 0)
+            {
+                // Caller just wants length
+                msz_readers = NULL;
+            }
+            else if (call_data->cchReaders != SCARD_AUTOALLOCATE &&
+                     utf8len > call_data->cchReaders)
+            {
+                ReturnCode = XSCARD_E_INSUFFICIENT_BUFFER;
+            }
+            else if ((msz_readers = (char *)malloc(utf8len)) == NULL)
+            {
+                LOG(LOG_LEVEL_ERROR, "scard_function_list_readers_return: "
+                    "Can't allocate %u bytes of memory", utf8len);
+                utf8len = 0;
+                ReturnCode = XSCARD_E_NO_MEMORY;
+            }
+            else
+            {
+                in_utf16_le_fixed_as_utf8(in_s, cBytes / 2,
+                                          msz_readers, utf8len);
+            }
+        }
+    }
+
+    rv = call_data->callback(uds_client_id, ReturnCode, utf8len, msz_readers);
+    free(msz_readers);
+    return rv;
+}
+
 /**
  *
  *****************************************************************************/
@@ -2580,7 +2688,9 @@ scard_handle_ListReaders_Return(struct stream *s, IRP *irp,
     }
     /* get OutputBufferLen */
     xstream_rd_u32_le(s, len);
-    scard_function_list_readers_return(irp->user_data, s, len, IoStatus);
+    scard_function_list_readers_return(
+        (struct list_readers_call *)irp->user_data,
+        s, len, IoStatus);
     devredir_irp_delete(irp);
     LOG_DEVEL(LOG_LEVEL_DEBUG, "leaving");
 }

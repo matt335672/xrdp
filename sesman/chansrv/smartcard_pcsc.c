@@ -37,12 +37,14 @@
 #include <config_ac.h>
 #endif
 
+#include <stddef.h>
 #include <stdio.h>
 
 #define JAY_TODO_CONTEXT    0
 #define JAY_TODO_WIDE       1
 
 #include "ms-erref.h"
+#include "ms-rdpesc.h"
 #include "os_calls.h"
 #include "string_calls.h"
 #include "smartcard.h"
@@ -700,61 +702,118 @@ scard_process_release_context(struct trans *con, struct stream *in_s)
 }
 
 /*****************************************************************************/
-struct pcsc_list_readers
+static int
+send_long_and_multistring_return(int uds_client_id,
+                                 enum pcsc_message_code msg_code,
+                                 unsigned int ReturnCode,
+                                 unsigned int cBytes,
+                                 const char *msz)
 {
-    int uds_client_id;
-    int cchReaders;
-};
+    struct pcsc_uds_client *uds_client;
+
+    if ((uds_client = get_uds_client_by_id(uds_client_id)) == NULL)
+    {
+        LOG(LOG_LEVEL_ERROR, "send_long_and_multistring_return: "
+            "get_uds_client_by_id failed to find uds_client_id %d",
+            uds_client_id);
+        return 1;
+    }
+    struct trans *con = uds_client->con;
+    struct stream *out_s = trans_get_out_s(con, 64 + cBytes);
+    if (out_s == NULL)
+    {
+        return 1;
+    }
+    s_push_layer(out_s, iso_hdr, 8);
+    out_uint32_le(out_s, ReturnCode);
+    out_uint32_le(out_s, cBytes);
+    // The string can be a NULL too in the IDL (even if cBytes is > 0).
+    // This is context dependent, and the receiver needs to cater for this
+    if (msz != NULL)
+    {
+        out_uint8a(out_s, msz, cBytes);
+    }
+    s_mark_end(out_s);
+    unsigned int bytes = (unsigned int) (out_s->end - out_s->data);
+    s_pop_layer(out_s, iso_hdr);
+    out_uint32_le(out_s, bytes - 8);
+    out_uint32_le(out_s, msg_code);
+    return trans_force_write(con);
+}
+
+/*****************************************************************************/
+static int
+send_list_readers_return(int uds_client_id,
+                         unsigned int ReturnCode,
+                         unsigned int cBytes,
+                         const char *msz)
+{
+    return send_long_and_multistring_return(uds_client_id,
+                                            SCARD_LIST_READERS, ReturnCode, cBytes, msz);
+}
+
 
 /*****************************************************************************/
 /* returns error */
 int
 scard_process_list_readers(struct trans *con, struct stream *in_s)
 {
-    int hContext;
-    unsigned int bytes_groups;
-    int cchReaders;
-    /*
-     * At the time of writing, the groups strings which can be sent
-     * over this interface are all small:-
-     *
-     * "SCard$AllReaders", "SCard$DefaultReaders", "SCard$LocalReaders" and
-     * "SCard$SystemReaders"
-     *
-     * We'll allow a bit extra in case the interface changes
-     */
-    char groups[256];
+    unsigned int hContext;
+    unsigned int cBytes;
+
     struct pcsc_uds_client *uds_client;
+    int uds_client_id;
     struct pcsc_context *lcontext;
-    struct pcsc_list_readers *pcscListReaders;
+    struct list_readers_call *call_data;
 
     LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_list_readers:");
     uds_client = (struct pcsc_uds_client *) (con->callback_data);
-    in_uint32_le(in_s, hContext);
-    in_uint32_le(in_s, bytes_groups);
-    if (bytes_groups > (sizeof(groups) - 1))
+    uds_client_id = uds_client->uds_client_id;
+
+    if (!s_check_rem_and_log(in_s, 4 + 4, "Reading SCARD_LIST_READERS(1)"))
     {
-        LOG(LOG_LEVEL_ERROR, "scard_process_list_readers: Unreasonable string length %u",
-            bytes_groups);
-        return 1;
+        return send_list_readers_return(uds_client_id,
+                                        XSCARD_F_INTERNAL_ERROR, 0, NULL);
     }
-    in_uint8a(in_s, groups, bytes_groups);
-    groups[bytes_groups] = '\0';
-    in_uint32_le(in_s, cchReaders);
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_list_readers: hContext 0x%8.8x cchReaders %d",
-              hContext, cchReaders);
+    in_uint32_le(in_s, hContext);
+    in_uint32_le(in_s, cBytes);
+
     lcontext = get_pcsc_context_by_app_context(uds_client, hContext);
     if (lcontext == 0)
     {
         LOG(LOG_LEVEL_ERROR, "scard_process_list_readers: "
             "get_pcsc_context_by_app_context failed");
-        return 1;
+        return send_list_readers_return(uds_client_id,
+                                        XSCARD_E_INVALID_HANDLE, 0, NULL);
     }
-    pcscListReaders = g_new0(struct pcsc_list_readers, 1);
-    pcscListReaders->uds_client_id = uds_client->uds_client_id;
-    pcscListReaders->cchReaders = cchReaders;
-    scard_send_list_readers(pcscListReaders, lcontext->context.pbContext,
-                            lcontext->context.cbContext, groups, cchReaders);
+
+    if (!s_check_rem_and_log(in_s, cBytes + 4 + 4,
+                             "Reading SCARD_LIST_READERS(2)"))
+    {
+        return send_list_readers_return(uds_client_id,
+                                        XSCARD_F_INTERNAL_ERROR, 0, NULL);
+    }
+
+    unsigned int call_data_size =
+        offsetof(struct list_readers_call, mszGroups) +
+        cBytes * sizeof(call_data->mszGroups[0]);
+
+    call_data = (struct list_readers_call *)malloc(call_data_size);
+    if (call_data == NULL)
+    {
+        return send_list_readers_return(uds_client_id,
+                                        XSCARD_E_NO_MEMORY, 0, NULL);
+    }
+
+    call_data->uds_client_id = uds_client->uds_client_id;
+    call_data->callback = send_list_readers_return;
+    call_data->Context = lcontext->context;
+    in_uint32_le(in_s, call_data->fmszReadersIsNULL);
+    in_uint32_le(in_s, call_data->cchReaders);
+    call_data->cBytes = cBytes;
+    in_uint8a(in_s, call_data->mszGroups, cBytes);
+
+    scard_send_list_readers(call_data);
     return 0;
 }
 
@@ -794,119 +853,6 @@ count_multistring_elements(const char *str, unsigned int len)
     }
 
     return rv;
-}
-
-/*****************************************************************************/
-int
-scard_function_list_readers_return(void *user_data,
-                                   struct stream *in_s,
-                                   int len, int status)
-{
-    /* see [MS-RDPESC] 2.2.3.4
-     *
-     * IDL:-
-     *
-     * typedef struct _longAndMultiString_Return {
-     *     long ReturnCode;
-     *     [range(0,65536)] unsigned long cBytes;
-     *     [unique] [size_is(cBytes)] byte *msz;
-     *     } ListReaderGroups_Return, ListReaders_Return;
-     *
-     * Type summary:-
-     *
-     * ReturnCode         32-bit word
-     * CBytes             Unsigned 32-bit word
-     * msz                Embedded full pointer to conformant array of bytes
-     *
-     * NDR:-
-     *
-     * Offset   Decription
-     * 0        ReturnCode
-     * 4        cBytes
-     * 8        msz pointer Referent Identifier
-     * 12       length of multistring in bytes
-     * 16       Multistring data
-     */
-    struct stream *out_s;
-    int return_code = XSCARD_E_UNEXPECTED;
-    int            bytes;
-    int            cchReaders;
-    int            llen;
-    int uds_client_id;
-    struct pcsc_uds_client *uds_client;
-    struct trans *con;
-    struct pcsc_list_readers *pcscListReaders;
-    char *msz_readers = NULL;
-    unsigned int msz_readers_len = 0;
-
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_function_list_readers_return:");
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "  status 0x%8.8x", status);
-    pcscListReaders = (struct pcsc_list_readers *) user_data;
-    if (pcscListReaders == 0)
-    {
-        LOG(LOG_LEVEL_ERROR, "scard_function_list_readers_return: "
-            "pcscListReaders is nil");
-        return 1;
-    }
-    uds_client_id = pcscListReaders->uds_client_id;
-    cchReaders = pcscListReaders->cchReaders;
-    g_free(pcscListReaders);
-    uds_client = (struct pcsc_uds_client *)
-                 get_uds_client_by_id(uds_client_id);
-    if (uds_client == 0)
-    {
-        LOG(LOG_LEVEL_ERROR, "scard_function_list_readers_return: "
-            "get_uds_client_by_id failed, could not find id %d",
-            uds_client_id);
-        return 1;
-    }
-    con = uds_client->con;
-    llen = 0;
-    if (status == 0)
-    {
-        in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.1 */
-        in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.2 */
-
-        in_uint32_le(in_s, return_code);
-        in_uint8s(in_s, 4); // cBytes
-        in_uint8s(in_s, 4); // msz pointer Referent Identifier
-
-        in_uint32_le(in_s, llen);
-        if (cchReaders > 0)
-        {
-            // Convert the wide multistring to a UTF-8 multistring
-            msz_readers_len = in_utf16_le_fixed_as_utf8_length(in_s, llen / 2);
-            msz_readers = (char *)malloc(msz_readers_len);
-            if (msz_readers == NULL)
-            {
-                LOG(LOG_LEVEL_ERROR, "scard_function_list_readers_return: "
-                    "Can't allocate %u bytes of memory", msz_readers_len);
-                msz_readers_len = 0;
-            }
-            else
-            {
-                in_utf16_le_fixed_as_utf8(in_s, llen / 2,
-                                          msz_readers, msz_readers_len);
-            }
-        }
-    }
-
-    out_s = trans_get_out_s(con, 8192);
-    if (out_s == NULL)
-    {
-        return 1;
-    }
-    s_push_layer(out_s, iso_hdr, 8);
-    out_uint32_le(out_s, return_code);
-    out_uint32_le(out_s, msz_readers_len);
-    out_uint8a(out_s, msz_readers, msz_readers_len);
-    free(msz_readers);
-    s_mark_end(out_s);
-    bytes = (int) (out_s->end - out_s->data);
-    s_pop_layer(out_s, iso_hdr);
-    out_uint32_le(out_s, bytes - 8);
-    out_uint32_le(out_s, SCARD_LIST_READERS);
-    return trans_force_write(con);
 }
 
 /*****************************************************************************/

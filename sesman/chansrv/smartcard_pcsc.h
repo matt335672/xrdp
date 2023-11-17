@@ -37,10 +37,6 @@ int scard_alloc_new_app_context(int uds_client_id,
 int scard_free_app_context(int uds_client_id,
                            const struct redir_scardcontext *context);
 
-int scard_function_list_readers_return(void *user_data,
-                                       struct stream *in_s,
-                                       int len, int status);
-
 int scard_function_transmit_return(void *user_data,
                                    struct stream *in_s,
                                    int len, int status);
