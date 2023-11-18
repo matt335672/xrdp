@@ -54,8 +54,6 @@
 #include "list.h"
 #include "xrdp_sockets.h"
 
-#include <winscard.h>
-
 #include "pcsc/xrdp_pcsc.h"
 
 extern int g_display_num; /* in chansrv.c */
@@ -635,7 +633,7 @@ scard_function_release_context_return(void *user_data,
         return 1;
     }
     s_push_layer(out_s, iso_hdr, 8);
-    out_uint32_le(out_s, status); /* SCARD_S_SUCCESS status */
+    out_uint32_le(out_s, status); /* XSCARD_S_SUCCESS status */
     s_mark_end(out_s);
     bytes = (int) (out_s->end - out_s->data);
     s_pop_layer(out_s, iso_hdr);
@@ -937,7 +935,7 @@ scard_function_connect_return(void *user_data,
         }
         else
         {
-            status = SCARD_E_PROTO_MISMATCH;
+            status = XSCARD_E_PROTO_MISMATCH;
         }
     }
     out_s = trans_get_out_s(con, 8192);
@@ -948,7 +946,7 @@ scard_function_connect_return(void *user_data,
     s_push_layer(out_s, iso_hdr, 8);
     out_uint32_le(out_s, hCard);
     out_uint32_le(out_s, dwActiveProtocol);
-    out_uint32_le(out_s, status); /* SCARD_S_SUCCESS status */
+    out_uint32_le(out_s, status); /* XSCARD_S_SUCCESS status */
     s_mark_end(out_s);
     bytes = (int) (out_s->end - out_s->data);
     s_pop_layer(out_s, iso_hdr);
@@ -1018,7 +1016,7 @@ scard_function_disconnect_return(void *user_data,
         return 1;
     }
     s_push_layer(out_s, iso_hdr, 8);
-    out_uint32_le(out_s, status); /* SCARD_S_SUCCESS status */
+    out_uint32_le(out_s, status); /* XSCARD_S_SUCCESS status */
     s_mark_end(out_s);
     bytes = (int) (out_s->end - out_s->data);
     s_pop_layer(out_s, iso_hdr);
@@ -1088,7 +1086,7 @@ scard_function_begin_transaction_return(void *user_data,
         return 1;
     }
     s_push_layer(out_s, iso_hdr, 8);
-    out_uint32_le(out_s, status); /* SCARD_S_SUCCESS status */
+    out_uint32_le(out_s, status); /* XSCARD_S_SUCCESS status */
     s_mark_end(out_s);
     bytes = (int) (out_s->end - out_s->data);
     s_pop_layer(out_s, iso_hdr);
@@ -1162,7 +1160,7 @@ scard_function_end_transaction_return(void *user_data,
         return 1;
     }
     s_push_layer(out_s, iso_hdr, 8);
-    out_uint32_le(out_s, status); /* SCARD_S_SUCCESS status */
+    out_uint32_le(out_s, status); /* XSCARD_S_SUCCESS status */
     s_mark_end(out_s);
     bytes = (int) (out_s->end - out_s->data);
     s_pop_layer(out_s, iso_hdr);
@@ -1321,7 +1319,7 @@ scard_function_transmit_return(void *user_data,
     out_uint8a(out_s, recv_ior.extra_data, recv_ior.extra_bytes);
     out_uint32_le(out_s, cbRecvLength);
     out_uint8a(out_s, recvBuf, cbRecvLength);
-    out_uint32_le(out_s, status); /* SCARD_S_SUCCESS status */
+    out_uint32_le(out_s, status); /* XSCARD_S_SUCCESS status */
     s_mark_end(out_s);
     bytes = (int) (out_s->end - out_s->data);
     s_pop_layer(out_s, iso_hdr);
@@ -1416,7 +1414,7 @@ scard_function_control_return(void *user_data,
     s_push_layer(out_s, iso_hdr, 8);
     out_uint32_le(out_s, cbRecvLength);
     out_uint8a(out_s, recvBuf, cbRecvLength);
-    out_uint32_le(out_s, status); /* SCARD_S_SUCCESS status */
+    out_uint32_le(out_s, status); /* XSCARD_S_SUCCESS status */
     s_mark_end(out_s);
     bytes = (int) (out_s->end - out_s->data);
     s_pop_layer(out_s, iso_hdr);
@@ -1472,6 +1470,7 @@ scard_process_status(struct trans *con, struct stream *in_s)
     return 0;
 }
 
+#if 0
 #define MS_SCARD_UNKNOWN    0
 #define MS_SCARD_ABSENT     1
 #define MS_SCARD_PRESENT    2
@@ -1479,6 +1478,7 @@ scard_process_status(struct trans *con, struct stream *in_s)
 #define MS_SCARD_POWERED    4
 #define MS_SCARD_NEGOTIABLE 5
 #define MS_SCARD_SPECIFIC   6
+#endif
 
 #define PC_SCARD_UNKNOWN    0x0001 /**< Unknown state */
 #define PC_SCARD_ABSENT     0x0002 /**< Card is absent */
@@ -1611,7 +1611,7 @@ scard_function_status_return(void *user_data,
     out_uint32_le(out_s, dwProtocol);
     out_uint32_le(out_s, dwAtrLen);
     out_uint8a(out_s, attr, dwAtrLen);
-    out_uint32_le(out_s, status); /* SCARD_S_SUCCESS status */
+    out_uint32_le(out_s, status); /* XSCARD_S_SUCCESS status */
     s_mark_end(out_s);
     bytes = (int) (out_s->end - out_s->data);
     s_pop_layer(out_s, iso_hdr);
@@ -1724,7 +1724,7 @@ scard_function_get_status_change_return(void *user_data,
     if (status != 0)
     {
         out_uint32_le(out_s, 0); /* cReaders */
-        out_uint32_le(out_s, status); /* SCARD_S_SUCCESS status */
+        out_uint32_le(out_s, status); /* XSCARD_S_SUCCESS status */
     }
     else
     {
@@ -1746,7 +1746,7 @@ scard_function_get_status_change_return(void *user_data,
                 out_uint8a(out_s, atr, 36);
             }
         }
-        out_uint32_le(out_s, status); /* SCARD_S_SUCCESS status */
+        out_uint32_le(out_s, status); /* XSCARD_S_SUCCESS status */
     }
 
     s_mark_end(out_s);
@@ -1815,7 +1815,7 @@ scard_function_cancel_return(void *user_data,
         return 1;
     }
     s_push_layer(out_s, iso_hdr, 8);
-    out_uint32_le(out_s, status); /* SCARD_S_SUCCESS status */
+    out_uint32_le(out_s, status); /* XSCARD_S_SUCCESS status */
     s_mark_end(out_s);
     bytes = (int) (out_s->end - out_s->data);
     s_pop_layer(out_s, iso_hdr);
