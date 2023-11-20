@@ -499,7 +499,7 @@ scard_function_establish_context_return(void *user_data,
      */
     int bytes;
     int uds_client_id;
-    int return_code = MS_SCARD_E_UNEXPECTED;
+    int return_code = XSCARD_E_UNEXPECTED;
     unsigned int context_bytes;
     int app_context = 0;
     char context[16] = {0};
@@ -547,7 +547,7 @@ scard_function_establish_context_return(void *user_data,
                 in_uint8a(in_s, context, context_bytes);
             }
         }
-        if (return_code == MS_SCARD_S_SUCCESS)
+        if (return_code == XSCARD_S_SUCCESS)
         {
             lcontext = uds_client_add_context(uds_client,
                                               context, context_bytes);
@@ -771,7 +771,7 @@ scard_function_list_readers_return(void *user_data,
      * 16       Multistring data
      */
     struct stream *out_s;
-    int return_code = MS_SCARD_E_UNEXPECTED;
+    int return_code = XSCARD_E_UNEXPECTED;
     int            bytes;
     int            cchReaders;
     int            llen;

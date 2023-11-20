@@ -137,7 +137,8 @@ extern int   g_rdpdr_chan_id;    /* in chansrv.c */
 /******************************************************************************
 **                   static functions local to this file                     **
 ******************************************************************************/
-static struct stream *scard_make_new_ioctl(IRP *irp, tui32 ioctl);
+static struct stream *scard_make_new_ioctl(IRP *irp, tui32 ioctl,
+        unsigned int ndr_size);
 static int  scard_add_new_device(tui32 device_id);
 static int  scard_get_free_slot(void);
 static void scard_release_resources(void);
@@ -812,13 +813,19 @@ scard_send_get_attrib(void *user_data, char *card, int card_bytes,
 /**
  * Create a new stream and insert specified IOCTL
  *
- * @param  irp    information about the I/O
- * @param  ioctl  the IOCTL code
+ * @param  irp      information about the I/O
+ * @param  ioctl    the IOCTL code
+ * @param  ndr_size Expected additional size for the NDR type
  *
  * @return stream with IOCTL inserted in it, NULL on error
+ *
+ * @post In addition to the IOCTL, the NDR common type header from [MS-RPCE]
+ *       2.2.6.1 is also inserted.
+ * @post The iso_hdr of the stream contains the location where the
+ *       size of the IOCTL has to be inserted.
  *****************************************************************************/
 static struct stream *
-scard_make_new_ioctl(IRP *irp, tui32 ioctl)
+scard_make_new_ioctl(IRP *irp, tui32 ioctl, unsigned int ndr_size)
 {
     /*
      * format of device control request
@@ -838,12 +845,23 @@ scard_make_new_ioctl(IRP *irp, tui32 ioctl)
      * u32       InputBufferLength
      * u32       IoControlCode
      * 20 bytes  padding
-     * xx bytes  InputBuffer (variable)
+     * xx bytes  InputBuffer (variable). First 8 bytes are the NDR
+     *           common type header
      */
 
     struct stream *s;
 
-    xstream_new(s, 1024 * 4);
+    make_stream(s);
+    if (s == NULL)
+    {
+        return s;
+    }
+    init_stream(s, (int)((24 + 4 + 4 + 4 + 20) + 8 + ndr_size));
+    if (s == NULL || s->data == NULL)
+    {
+        free_stream(s);
+        return NULL;
+    }
 
     devredir_insert_DeviceIoRequest(s,
                                     irp->DeviceId,
@@ -852,14 +870,14 @@ scard_make_new_ioctl(IRP *irp, tui32 ioctl)
                                     IRP_MJ_DEVICE_CONTROL,
                                     IRP_MN_NONE);
 
-    xstream_wr_u32_le(s, 2048);        /* OutputBufferLength               */
+    out_uint32_le(s, 2048);            /* OutputBufferLength               */
     s_push_layer(s, iso_hdr, 4);       /* InputBufferLength - insert later */
-    xstream_wr_u32_le(s, ioctl);       /* Ioctl Code                       */
+    out_uint32_le(s, ioctl);           /* Ioctl Code                       */
     out_uint8s(s, 20);                 /* padding                          */
 
     /* [MS-RPCE] 2.2.6.1 */
-    xstream_wr_u32_le(s, 0x00081001);  /* len 8, LE, v1                    */
-    xstream_wr_u32_le(s, 0xcccccccc);  /* filler                           */
+    out_uint32_le(s, 0x00081001);      /* len 8, LE, v1                */
+    out_uint32_le(s, 0xcccccccc);      /* filler                       */
 
     return s;
 }
@@ -958,7 +976,7 @@ scard_send_EstablishContext(IRP *irp, int scope)
     struct stream *s;
     int            bytes;
 
-    if ((s = scard_make_new_ioctl(irp, SCARD_IOCTL_ESTABLISH_CONTEXT)) == NULL)
+    if ((s = scard_make_new_ioctl(irp, SCARD_IOCTL_ESTABLISH_CONTEXT, 4096)) == NULL)
     {
         LOG_DEVEL(LOG_LEVEL_ERROR, "scard_make_new_ioctl failed");
         return;
@@ -1010,7 +1028,7 @@ scard_send_ReleaseContext(IRP *irp, char *context, int context_bytes)
         return;
     }
 
-    if ((s = scard_make_new_ioctl(irp, SCARD_IOCTL_RELEASE_CONTEXT)) == NULL)
+    if ((s = scard_make_new_ioctl(irp, SCARD_IOCTL_RELEASE_CONTEXT, 4096)) == NULL)
     {
         LOG_DEVEL(LOG_LEVEL_ERROR, "scard_make_new_ioctl failed");
         return;
@@ -1061,7 +1079,7 @@ scard_send_IsContextValid(IRP *irp, char *context, int context_bytes)
         return;
     }
 
-    if ((s = scard_make_new_ioctl(irp, SCARD_IOCTL_IS_VALID_CONTEXT)) == NULL)
+    if ((s = scard_make_new_ioctl(irp, SCARD_IOCTL_IS_VALID_CONTEXT, 4096)) == NULL)
     {
         LOG_DEVEL(LOG_LEVEL_ERROR, "scard_make_new_ioctl failed");
         return;
@@ -1165,7 +1183,7 @@ scard_send_ListReaders(IRP *irp, char *context, int context_bytes,
         return;
     }
 
-    if ((s = scard_make_new_ioctl(irp, SCARD_IOCTL_LIST_READERS_W)) == NULL)
+    if ((s = scard_make_new_ioctl(irp, SCARD_IOCTL_LIST_READERS_W, 4096)) == NULL)
     {
         LOG_DEVEL(LOG_LEVEL_ERROR, "scard_make_new_ioctl failed");
         return;
@@ -1367,7 +1385,7 @@ scard_send_GetStatusChange(IRP *irp, char *context, int context_bytes,
     ioctl = (wide) ? SCARD_IOCTL_GET_STATUS_CHANGE_W :
             SCARD_IOCTL_GET_STATUS_CHANGE_A;
 
-    if ((s = scard_make_new_ioctl(irp, ioctl)) == NULL)
+    if ((s = scard_make_new_ioctl(irp, ioctl, 4096)) == NULL)
     {
         LOG_DEVEL(LOG_LEVEL_ERROR, "scard_make_new_ioctl failed");
         return;
@@ -1515,7 +1533,7 @@ scard_send_Connect(IRP *irp, char *context, int context_bytes,
     ioctl = (wide) ? SCARD_IOCTL_CONNECT_W :
             SCARD_IOCTL_CONNECT_A;
 
-    if ((s = scard_make_new_ioctl(irp, ioctl)) == NULL)
+    if ((s = scard_make_new_ioctl(irp, ioctl, 4096)) == NULL)
     {
         LOG_DEVEL(LOG_LEVEL_ERROR, "scard_make_new_ioctl failed");
         return;
@@ -1592,7 +1610,7 @@ scard_send_Reconnect(IRP *irp, char *context, int context_bytes,
         return;
     }
 
-    if ((s = scard_make_new_ioctl(irp, SCARD_IOCTL_RECONNECT)) == NULL)
+    if ((s = scard_make_new_ioctl(irp, SCARD_IOCTL_RECONNECT, 4096)) == NULL)
     {
         LOG_DEVEL(LOG_LEVEL_ERROR, "scard_make_new_ioctl failed");
         return;
@@ -1662,7 +1680,7 @@ scard_send_BeginTransaction(IRP *irp, char *context, int context_bytes,
         return;
     }
 
-    if ((s = scard_make_new_ioctl(irp, SCARD_IOCTL_BEGIN_TRANSACTION)) == NULL)
+    if ((s = scard_make_new_ioctl(irp, SCARD_IOCTL_BEGIN_TRANSACTION, 4096)) == NULL)
     {
         LOG_DEVEL(LOG_LEVEL_ERROR, "scard_make_new_ioctl failed");
         return;
@@ -1730,7 +1748,7 @@ scard_send_EndTransaction(IRP *irp, char *context, int context_bytes,
         return;
     }
 
-    if ((s = scard_make_new_ioctl(irp, SCARD_IOCTL_END_TRANSACTION)) == NULL)
+    if ((s = scard_make_new_ioctl(irp, SCARD_IOCTL_END_TRANSACTION, 4096)) == NULL)
     {
         LOG_DEVEL(LOG_LEVEL_ERROR, "scard_make_new_ioctl failed");
         return;
@@ -1799,7 +1817,7 @@ scard_send_Status(IRP *irp, int wide, char *context, int context_bytes,
     }
 
     ioctl = wide ? SCARD_IOCTL_STATUS_W : SCARD_IOCTL_STATUS_A;
-    if ((s = scard_make_new_ioctl(irp, ioctl)) == NULL)
+    if ((s = scard_make_new_ioctl(irp, ioctl, 4096)) == NULL)
     {
         LOG_DEVEL(LOG_LEVEL_ERROR, "scard_make_new_ioctl");
         return;
@@ -1884,7 +1902,7 @@ scard_send_Disconnect(IRP *irp, char *context, int context_bytes,
         return;
     }
 
-    if ((s = scard_make_new_ioctl(irp, SCARD_IOCTL_DISCONNECT)) == NULL)
+    if ((s = scard_make_new_ioctl(irp, SCARD_IOCTL_DISCONNECT, 4096)) == NULL)
     {
         LOG_DEVEL(LOG_LEVEL_ERROR, "scard_make_new_ioctl failed");
         return;
@@ -1952,7 +1970,7 @@ scard_send_Transmit(IRP *irp, char *context, int context_bytes,
         return 1;
     }
 
-    if ((s = scard_make_new_ioctl(irp, SCARD_IOCTL_TRANSMIT)) == NULL)
+    if ((s = scard_make_new_ioctl(irp, SCARD_IOCTL_TRANSMIT, 4096)) == NULL)
     {
         LOG_DEVEL(LOG_LEVEL_ERROR, "scard_make_new_ioctl");
         return 1;
@@ -2140,7 +2158,7 @@ scard_send_Control(IRP *irp, char *context, int context_bytes,
         return 1;
     }
 
-    if ((s = scard_make_new_ioctl(irp, SCARD_IOCTL_CONTROL)) == NULL)
+    if ((s = scard_make_new_ioctl(irp, SCARD_IOCTL_CONTROL, 4096)) == NULL)
     {
         LOG_DEVEL(LOG_LEVEL_ERROR, "scard_make_new_ioctl");
         return 1;
@@ -2213,7 +2231,7 @@ scard_send_Cancel(IRP *irp, char *context, int context_bytes)
         return 1;
     }
 
-    if ((s = scard_make_new_ioctl(irp, SCARD_IOCTL_CANCEL)) == NULL)
+    if ((s = scard_make_new_ioctl(irp, SCARD_IOCTL_CANCEL, 4096)) == NULL)
     {
         LOG_DEVEL(LOG_LEVEL_ERROR, "scard_make_new_ioctl");
         return 1;
@@ -2265,7 +2283,7 @@ scard_send_GetAttrib(IRP *irp, char *card, int card_bytes, READER_STATE *rs)
         return 1;
     }
 
-    if ((s = scard_make_new_ioctl(irp, SCARD_IOCTL_GETATTRIB)) == NULL)
+    if ((s = scard_make_new_ioctl(irp, SCARD_IOCTL_GETATTRIB, 4096)) == NULL)
     {
         LOG_DEVEL(LOG_LEVEL_ERROR, "scard_make_new_ioctl");
         return 1;
