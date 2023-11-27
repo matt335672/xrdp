@@ -92,6 +92,13 @@ struct redir_scardcontext  /* 2.2.1.1 */
     char pbContext[16];
 };
 
+struct redir_scardhandle   /* 2.2.1.2 */
+{
+    struct redir_scardcontext Context;
+    unsigned int cbHandle;
+    char pbHandle[16];
+};
+
 struct establish_context_call
 {
     /** Client making this call */
@@ -140,7 +147,26 @@ struct list_readers_call
 #endif
 };
 
+struct connect_call
+{
+    int uds_client_id;
 
+    /** How to pass the result back to the client */
+    int (*callback)(int uds_client_id,
+                    unsigned int ReturnCode,
+                    unsigned int hCard,
+                    unsigned int dwActiveProtocol);
+
+    /* See 2.2.1.3 + 2.2.2.14 */
+    struct redir_scardcontext Context;
+    unsigned int dwShareMode;
+    unsigned int dwPreferredProtocols;
+#ifdef __cplusplus
+    char szReader[1];
+#else
+    char szReader[];
+#endif
+};
 
 void scard_device_announce(tui32 device_id);
 int  scard_get_wait_objs(tbus *objs, int *count, int *timeout);
@@ -183,9 +209,15 @@ int  scard_send_get_status_change(void *user_data,
                                   int wide, tui32 timeout,
                                   tui32 num_readers, READER_STATE *rsa);
 
-int  scard_send_connect(void *user_data,
-                        char *context, int context_bytes, int wide,
-                        READER_STATE *rs);
+/**
+ * Sends a connect call to the RDP client
+ *
+ * @param call_data Info about the call
+ *
+ * The call_data must be on the heap. After this call,
+ * ownership of the call_data is taken away from the caller.
+ */
+void  scard_send_connect(struct connect_call *call_data);
 
 int  scard_send_reconnect(void *user_data,
                           char *context, int context_bytes,

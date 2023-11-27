@@ -400,9 +400,8 @@ uds_client_remove_context(struct pcsc_uds_client *uds_client,
 
 /*****************************************************************************/
 static struct pcsc_card *
-context_add_card(struct pcsc_uds_client *uds_client,
-                 struct pcsc_context *acontext,
-                 char *card, int card_bytes)
+context_add_card(struct pcsc_context *acontext,
+                 const char *card, int card_bytes)
 {
     struct pcsc_card *pcscCard;
 
@@ -516,6 +515,34 @@ int scard_alloc_new_app_context(int uds_client_id,
         {
             *app_context = lcontext->app_context;
             rv = 0;
+        }
+    }
+    return rv;
+}
+
+/*****************************************************************************/
+/* Global interface to context_add_card() */
+int scard_alloc_card_handle(int uds_client_id,
+                            const struct redir_scardhandle *handle,
+                            unsigned int *app_handle)
+{
+    int rv = 1;
+    struct pcsc_uds_client *uds_client;
+
+    if ((uds_client = get_uds_client_by_id(uds_client_id)) != NULL)
+    {
+        struct pcsc_context *lcontext;
+        lcontext = get_pcsc_context_by_rdp_context(uds_client, &handle->Context);
+        if (lcontext != NULL)
+        {
+            struct pcsc_card *lcard;
+            lcard = context_add_card(lcontext,
+                                     handle->pbHandle, handle->cbHandle);
+            if (lcard != NULL)
+            {
+                *app_handle = lcard->app_card;
+                rv = 0;
+            }
         }
     }
     return rv;
@@ -855,110 +882,115 @@ count_multistring_elements(const char *str, unsigned int len)
     return rv;
 }
 
-/*****************************************************************************/
-/* returns error */
-int
-scard_process_connect(struct trans *con, struct stream *in_s)
-{
-    int hContext;
-    READER_STATE rs;
-    struct pcsc_uds_client *uds_client;
-    void *user_data;
-    struct pcsc_context *lcontext;
-
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_connect:");
-    uds_client = (struct pcsc_uds_client *) (con->callback_data);
-    g_memset(&rs, 0, sizeof(rs));
-    in_uint32_le(in_s, hContext);
-    in_uint8a(in_s, rs.reader_name, 100);
-    in_uint32_le(in_s, rs.dwShareMode);
-    in_uint32_le(in_s, rs.dwPreferredProtocols);
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_connect: rs.reader_name %s dwShareMode 0x%8.8x "
-              "dwPreferredProtocols 0x%8.8x", rs.reader_name, rs.dwShareMode,
-              rs.dwPreferredProtocols);
-    user_data = (void *) (tintptr) (uds_client->uds_client_id);
-    lcontext = get_pcsc_context_by_app_context(uds_client, hContext);
-    if (lcontext == 0)
-    {
-        LOG(LOG_LEVEL_ERROR, "scard_process_connect: "
-            "get_pcsc_context_by_app_context failed");
-        return 1;
-    }
-    uds_client->connect_context = lcontext;
-    scard_send_connect(user_data,
-                       lcontext->context.pbContext, lcontext->context.cbContext,
-                       1, &rs);
-    return 0;
-}
 
 /*****************************************************************************/
-int
-scard_function_connect_return(void *user_data,
-                              struct stream *in_s,
-                              int len, unsigned int status)
+static int
+send_connect_return(int uds_client_id,
+                    unsigned int ReturnCode,
+                    unsigned int hCard,
+                    unsigned int dwActiveProtocol)
 {
-    int dwActiveProtocol;
-    int hCard;
-    int bytes;
-    int uds_client_id;
-    struct stream *out_s;
     struct pcsc_uds_client *uds_client;
-    struct trans *con;
-    char *card;
-    int card_bytes;
-    struct pcsc_card *lcard;
 
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_function_connect_return:");
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "  status 0x%8.8x", status);
-    uds_client_id = (int) (tintptr) user_data;
-    uds_client = (struct pcsc_uds_client *)
-                 get_uds_client_by_id(uds_client_id);
-    if (uds_client == 0)
+    if ((uds_client = get_uds_client_by_id(uds_client_id)) == NULL)
     {
-        LOG(LOG_LEVEL_ERROR, "scard_function_connect_return: "
+        LOG(LOG_LEVEL_ERROR, "send_connect_return: "
             "get_uds_client_by_id failed to find uds_client_id %d",
             uds_client_id);
         return 1;
     }
-    con = uds_client->con;
-    dwActiveProtocol = 0;
-    hCard = 0;
-    if (status == 0)
-    {
-        in_uint8s(in_s, 36);
-        in_uint32_le(in_s, dwActiveProtocol);
-        if (len > 40)
-        {
-            in_uint32_le(in_s, card_bytes);
-            in_uint8p(in_s, card, card_bytes);
-            lcard = context_add_card(uds_client, uds_client->connect_context,
-                                     card, card_bytes);
-            hCard = lcard->app_card;
-            LOG_DEVEL(LOG_LEVEL_DEBUG, "  hCard %d dwActiveProtocol %d", hCard,
-                      dwActiveProtocol);
-        }
-        else
-        {
-            status = XSCARD_E_PROTO_MISMATCH;
-        }
-    }
-    out_s = trans_get_out_s(con, 8192);
+    struct trans *con = uds_client->con;
+
+    struct stream *out_s = trans_get_out_s(con, 64);
     if (out_s == NULL)
     {
         return 1;
     }
+
     s_push_layer(out_s, iso_hdr, 8);
+    out_uint32_le(out_s, ReturnCode);
     out_uint32_le(out_s, hCard);
     out_uint32_le(out_s, dwActiveProtocol);
-    out_uint32_le(out_s, status); /* XSCARD_S_SUCCESS status */
     s_mark_end(out_s);
-    bytes = (int) (out_s->end - out_s->data);
+    unsigned int bytes = (unsigned int) (out_s->end - out_s->data);
     s_pop_layer(out_s, iso_hdr);
     out_uint32_le(out_s, bytes - 8);
     out_uint32_le(out_s, SCARD_CONNECT);
     return trans_force_write(con);
 }
 
+/*****************************************************************************/
+/* returns error */
+int
+scard_process_connect(struct trans *con, struct stream *in_s)
+{
+    unsigned int hContext;
+    unsigned int dwShareMode;
+    unsigned int dwPreferredProtocols;
+    unsigned int reader_len;
+
+    struct pcsc_uds_client *uds_client;
+    int uds_client_id;
+    struct pcsc_context *lcontext;
+    struct connect_call *call_data;
+
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_connect:");
+    uds_client = (struct pcsc_uds_client *) (con->callback_data);
+    uds_client_id = uds_client->uds_client_id;
+
+    if (!s_check_rem_and_log(in_s, 4 + 4 + 4 + 4, "Reading SCARD_CONNECT(1)"))
+    {
+        return send_connect_return(uds_client_id,
+                                   XSCARD_E_NO_MEMORY, 0, 0);
+    }
+
+    in_uint32_le(in_s, hContext);
+    in_uint32_le(in_s, dwShareMode);
+    in_uint32_le(in_s, dwPreferredProtocols);
+    in_uint32_le(in_s, reader_len);
+
+    lcontext = get_pcsc_context_by_app_context(uds_client, hContext);
+    if (lcontext == 0)
+    {
+        LOG(LOG_LEVEL_ERROR, "scard_process_connect: "
+            "get_pcsc_context_by_app_context failed");
+        return send_connect_return(uds_client_id,
+                                   XSCARD_E_INVALID_HANDLE, 0, 0);
+    }
+
+    if (!s_check_rem_and_log(in_s, reader_len, "Reading SCARD_CONNECT(2)"))
+    {
+        return send_list_readers_return(uds_client_id,
+                                        XSCARD_F_INTERNAL_ERROR, 0, 0);
+    }
+
+    // Add the terminator to the string for the call
+    unsigned int call_data_size =
+        offsetof(struct connect_call, szReader) +
+        (reader_len + 1) * sizeof(call_data->szReader[0]);
+
+    call_data = (struct connect_call *)malloc(call_data_size);
+    if (call_data == NULL)
+    {
+        return send_connect_return(uds_client_id,
+                                   XSCARD_E_NO_MEMORY, 0, 0);
+    }
+
+    //LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_connect: rs.reader_name %s dwShareMode 0x%8.8x "
+    //          "dwPreferredProtocols 0x%8.8x", rs.reader_name, rs.dwShareMode,
+    //          rs.dwPreferredProtocols);
+
+    call_data->uds_client_id = uds_client->uds_client_id;
+    call_data->callback = send_connect_return;
+    call_data->Context = lcontext->context;
+    call_data->dwShareMode = dwShareMode;
+    call_data->dwPreferredProtocols = dwPreferredProtocols;
+    in_uint8a(in_s, call_data->szReader, reader_len);
+    call_data->szReader[reader_len] = '\0';
+
+    scard_send_connect(call_data);
+    return 0;
+}
 /*****************************************************************************/
 /* returns error */
 int

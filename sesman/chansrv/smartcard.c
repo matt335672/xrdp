@@ -159,10 +159,8 @@ static void scard_send_GetStatusChange(IRP *irp,
                                        int wide,
                                        tui32 timeout, tui32 num_readers,
                                        READER_STATE *rsa);
-static void scard_send_Connect(IRP *irp,
-                               char *context, int context_bytes,
-                               int wide,
-                               READER_STATE *rs);
+static void scard_send_Connect(struct stream *s,
+                               struct connect_call *call_data);
 static void scard_send_Reconnect(IRP *irp,
                                  char *context, int context_bytes,
                                  char *card, int card_bytes,
@@ -548,29 +546,48 @@ scard_send_get_status_change(void *call_data, char *context, int context_bytes,
  * @param  con   connection to client
  * @param  wide  TRUE if unicode string
  *****************************************************************************/
-int
-scard_send_connect(void *call_data, char *context, int context_bytes,
-                   int wide, READER_STATE *rs)
+void
+scard_send_connect(struct connect_call *call_data)
 {
     IRP *irp;
+    struct stream *s;
 
     /* setup up IRP */
     if ((irp = devredir_irp_new()) == NULL)
     {
         LOG_DEVEL(LOG_LEVEL_ERROR, "system out of memory");
-        return 1;
+        call_data->callback(call_data->uds_client_id, XSCARD_E_NO_MEMORY, 0, 0);
+        free(call_data);
     }
+    else
+    {
+        unsigned int ioctl_size = 64;
+        ioctl_size +=
+            2 * utf8_as_utf16_word_count(call_data->szReader,
+                                         strlen(call_data->szReader) + 1);
 
-    irp->scard_index = g_scard_index;
-    irp->CompletionId = g_completion_id++;
-    irp->DeviceId = g_device_id;
-    irp->callback = scard_handle_Connect_Return;
-    irp->user_data = call_data;
+        irp->scard_index = g_scard_index;
+        irp->CompletionId = g_completion_id++;
+        irp->DeviceId = g_device_id;
+        irp->callback = scard_handle_Connect_Return;
+        /* Pass ownership of the call_data to the IRP */
+        irp->user_data = call_data;
+        irp->extra_destructor = devredir_irp_free_user_data;
 
-    /* send IRP to client */
-    scard_send_Connect(irp, context, context_bytes, wide, rs);
-
-    return 0;
+        s = scard_make_new_ioctl(irp, SCARD_IOCTL_CONNECT_W, ioctl_size);
+        if (s == NULL)
+        {
+            LOG_DEVEL(LOG_LEVEL_ERROR, "scard_make_new_ioctl failed");
+            call_data->callback(call_data->uds_client_id,
+                                XSCARD_E_NO_MEMORY, 0, 0);
+            devredir_irp_delete(irp);
+        }
+        else
+        {
+            /* send IRP to client */
+            scard_send_Connect(s, call_data);
+        }
+    }
 }
 
 /**
@@ -1015,13 +1032,88 @@ scard_release_resources(void)
 
 /*****************************************************************************/
 static void
-align_s(struct stream *s, unsigned int boundary)
+out_align_s(struct stream *s, unsigned int boundary)
 {
     unsigned int over = (unsigned int)(s->p - s->data) % boundary;
     if (over != 0)
     {
         out_uint8s(s, boundary - over);
     }
+}
+
+/*****************************************************************************/
+static void
+in_align_s(struct stream *s, unsigned int boundary)
+{
+    unsigned int over = (unsigned int)(s->p - s->data) % boundary;
+    if (over != 0)
+    {
+        unsigned int seek = boundary - over;
+        if (s_check_rem(s, seek))
+        {
+            in_uint8s(s, seek);
+        }
+    }
+}
+
+/*****************************************************************************/
+/**
+ * Outputs first part of a DEVREDIR_SCARDCONTEXT
+ * @param s Stream
+ * @param Context Context
+ * @param referent_id Referent identifier for the array
+ *
+ * This call will be followed stage by a call to
+ * out_redir_scardcontext_part2(). The positioning of the call
+ * depends on NDR rules.
+ */
+static void
+out_redir_scardcontext_part1(struct stream *s,
+                             const struct redir_scardcontext *Context,
+                             unsigned int referent_id)
+{
+    out_align_s(s, 4);
+    out_uint32_le(s, Context->cbContext);
+    out_uint32_le(s, referent_id);
+}
+
+/*****************************************************************************/
+/**
+ * Outputs second part of a DEVREDIR_SCARDCONTEXT
+ * @param s Stream
+ * @param Context Context
+ */
+static void
+out_redir_scardcontext_part2(struct stream *s,
+                             const struct redir_scardcontext *Context)
+{
+    out_align_s(s, 4);
+    out_uint32_le(s, Context->cbContext);
+    out_uint8a(s, Context->pbContext, Context->cbContext);
+}
+
+/*****************************************************************************/
+/**
+ * Outputs the pointed-to-data for this IDL pointer type:-
+ *     [string] const wchar_t* str;
+ *
+ * It is assumed that the referent identifier for the string has already
+ * been sent
+ *
+ * @param s Output stream
+ * @param str UTF-8 string to output
+ */
+static void
+out_conformant_and_varying_string(struct stream *s, const char *str)
+{
+    out_align_s(s, 4);
+    unsigned int len = strlen(str) + 1;
+    unsigned int num_chars = utf8_as_utf16_word_count(str, len);
+    // Max number, offset and actual count ([C706] 14.3.3.4)
+    out_uint32_le(s, num_chars);
+    out_uint32_le(s, 0);
+    out_uint32_le(s, num_chars);
+    out_utf8_as_utf16_le(s, str, len);
 }
 
 /**
@@ -1040,7 +1132,7 @@ scard_send_EstablishContext(struct stream *s,
     /* [MS-RDPESC] 2.2.2.1 EstablishContext_Call */
     out_uint32_le(s, call_data->dwScope);
 
-    align_s(s, 8); // [MS-RPCE] 2.2.6.2 */
+    out_align_s(s, 8); // [MS-RPCE] 2.2.6.2 */
     s_mark_end(s);
 
     s_pop_layer(s, mcs_hdr);
@@ -1074,10 +1166,8 @@ scard_send_ReleaseContext(struct stream *s,
 
     s_push_layer(s, mcs_hdr, 4); /* bytes, set later */
     out_uint32_le(s, 0x00000000);
-    out_uint32_le(s, call_data->Context.cbContext);
-    out_uint32_le(s, 0x00020000);
-    out_uint32_le(s, call_data->Context.cbContext);
-    out_uint8a(s, call_data->Context.pbContext, call_data->Context.cbContext);
+    out_redir_scardcontext_part1(s, &call_data->Context, 0x00200000);
+    out_redir_scardcontext_part2(s, &call_data->Context);
 
     s_mark_end(s);
 
@@ -1225,8 +1315,7 @@ scard_send_ListReaders(struct stream *s,
     out_uint32_le(s, 0x00000000);
 
     // REDIR_SCARDCONTEXT Context;
-    out_uint32_le(s, call_data->Context.cbContext);
-    out_uint32_le(s, 0x00020000);
+    out_redir_scardcontext_part1(s, &call_data->Context, 0x00200000);
     // [range(0, 65536)] unsigned long cBytes;
     out_uint32_le(s, cBytes);
     // [unique] [size_is(cBytes)] const byte *mszGroups; (pointer)
@@ -1242,18 +1331,17 @@ scard_send_ListReaders(struct stream *s,
 
     // At the end of the struct come the pointed-to structures
 
-    // Context field pbContext is a Uni-dimensional conformant array
-    out_uint32_le(s, call_data->Context.cbContext);
-    out_uint8a(s, call_data->Context.pbContext, call_data->Context.cbContext);
+    // Context
+    out_redir_scardcontext_part2(s, &call_data->Context);
 
-    // mszGroups is also a Uni-dimensional conformant array of bytes
+    // mszGroups is a Uni-dimensional conformant array of bytes
     if (cBytes > 0)
     {
-        align_s(s, 4);
+        out_align_s(s, 4);
         out_uint32_le(s, cBytes);
         out_utf8_as_utf16_le(s, mszGroups, cBytes);
     }
-    align_s(s, 8);
+    out_align_s(s, 8); // [MS-RPCE] 2.2.6.2 */
     s_mark_end(s);
 
     s_pop_layer(s, mcs_hdr);
@@ -1274,49 +1362,6 @@ scard_send_ListReaders(struct stream *s,
     LOG_DEVEL_HEXDUMP(LOG_LEVEL_TRACE, "scard_send_ListReaders:", s->data, bytes);
 
     free_stream(s);
-}
-
-/*****************************************************************************/
-/**
- * Outputs the pointed-to-data for one of these IDL pointer types:-
- *     [string] const wchar_t* str;  (wide != 0)
- *     [string] const char* str;     (wide == 0)
- *
- * It is assumed that the referent identifier for the string has already
- * been sent
- *
- * @param s Output stream
- * @param str UTF-8 string to output
- * @param wide Whether to output as a wide string or ASCII
- *
- * Note that wchar_t on Windows is 16-bit
- * TODO: These strings have two terminators. Is this necessary?
- */
-static void
-out_conformant_and_varying_string(struct stream *s, const char *str, int wide)
-{
-    align_s(s, 4);
-    unsigned int len = strlen(str);
-    if (wide)
-    {
-        unsigned int num_chars = utf8_as_utf16_word_count(str, len);
-        // Max number, offset and actual count
-        out_uint32_le(s, num_chars + 2);
-        out_uint32_le(s, 0);
-        out_uint32_le(s, num_chars + 2);
-        out_utf8_as_utf16_le(s, str, len);
-        out_uint16_le(s, 0);  // Terminate string
-        out_uint16_le(s, 0); // ?
-    }
-    else
-    {
-        out_uint32_le(s, len + 2);
-        out_uint32_le(s, 0);
-        out_uint32_le(s, len + 2);
-        out_uint8p(s, str, len);
-        out_uint8(s, 0);
-        out_uint8(s, 0);
-    }
 }
 
 /**
@@ -1439,7 +1484,7 @@ scard_send_GetStatusChange(IRP *irp, char *context, int context_bytes,
     out_uint8a(s, context, context_bytes);
 
     // rgReaderState is a Uni-dimensional conformant array
-    align_s(s, 4);
+    out_align_s(s, 4);
     out_uint32_le(s, num_readers);
 
     /* insert card reader state */
@@ -1464,7 +1509,7 @@ scard_send_GetStatusChange(IRP *irp, char *context, int context_bytes,
     for (i = 0; i < num_readers; i++)
     {
         rs = &rsa[i];
-        out_conformant_and_varying_string(s, rs->reader_name, wide);
+        out_conformant_and_varying_string(s, rs->reader_name);
     }
 
     s_mark_end(s);
@@ -1497,13 +1542,9 @@ scard_send_GetStatusChange(IRP *irp, char *context, int context_bytes,
  * @param  rs   reader state
  *****************************************************************************/
 static void
-scard_send_Connect(IRP *irp, char *context, int context_bytes,
-                   int wide, READER_STATE *rs)
+scard_send_Connect(struct stream *s, struct connect_call *call_data)
 {
-    /* see [MS-RDPESC] 2.2.2.13 for ASCII
-     * see [MS-RDPESC] 2.2.2.14 for Wide char
-     *
-     * Here is a breakdown of the Wide-char variant
+    /* See [MS-RDPESC] 2.2.2.14
      *
      * IDL:-
      *
@@ -1543,29 +1584,11 @@ scard_send_Connect(IRP *irp, char *context, int context_bytes,
      * 8        Referent Identifier for pbContext
      * 12       dwShareMode
      * 16       dwPreferredProtocols
-     * 20       Conformant Array pointed to by szReader
+     * 20       Conformant and varying Array pointed to by szReader
      * ??       Conformant Array pointed to by pbContext
      *
      */
-    SMARTCARD     *sc;
-    struct stream *s;
-    tui32          ioctl;
     int            bytes;
-
-    if ((sc = smartcards[irp->scard_index]) == NULL)
-    {
-        LOG_DEVEL(LOG_LEVEL_ERROR, "smartcards[%d] is NULL", irp->scard_index);
-        return;
-    }
-
-    ioctl = (wide) ? SCARD_IOCTL_CONNECT_W :
-            SCARD_IOCTL_CONNECT_A;
-
-    if ((s = scard_make_new_ioctl(irp, ioctl, 4096)) == NULL)
-    {
-        LOG_DEVEL(LOG_LEVEL_ERROR, "scard_make_new_ioctl failed");
-        return;
-    }
 
     s_push_layer(s, mcs_hdr, 4); /* bytes, set later */
     out_uint32_le(s, 0x00000000);
@@ -1573,23 +1596,19 @@ scard_send_Connect(IRP *irp, char *context, int context_bytes,
     out_uint32_le(s, 0x00020000);
 
     // REDIR_SCARDCONTEXT Context;
-    out_uint32_le(s, context_bytes);
-    out_uint32_le(s, 0x00020004);
-
+    out_redir_scardcontext_part1(s, &call_data->Context, 0x00200000);
     // unsigned long dwShareMode;
-    out_uint32_le(s, rs->dwShareMode);
+    out_uint32_le(s, call_data->dwShareMode);
     // unsigned long dwPreferredProtocols;
-    out_uint32_le(s, rs->dwPreferredProtocols);
+    out_uint32_le(s, call_data->dwPreferredProtocols);
 
     /* insert card reader name */
-    out_conformant_and_varying_string(s, rs->reader_name, wide);
+    out_conformant_and_varying_string(s, call_data->szReader);
 
-    /* insert context */
-    align_s(s, 4);
-    out_uint32_le(s, context_bytes);
-    out_uint8a(s, context, context_bytes);
-    out_uint32_le(s, 0); // ?
+    /* insert context data */
+    out_redir_scardcontext_part2(s, &call_data->Context);
 
+    out_align_s(s, 8); // [MS-RPCE] 2.2.6.2 */
     s_mark_end(s);
 
     s_pop_layer(s, mcs_hdr);
@@ -2124,7 +2143,7 @@ scard_send_Transmit(IRP *irp, char *context, int context_bytes,
     {
         out_uint32_le(s, send_bytes);
         out_uint8a(s, send_data, send_bytes);
-        align_s(s, 4);
+        out_align_s(s, 4);
     }
 
     if (recv_ior->cbPciLength > 0)
@@ -2495,7 +2514,7 @@ scard_function_release_context_return(struct release_context_call *call_data,
     int uds_client_id;
     int ReturnCode = XSCARD_E_UNEXPECTED;
 
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_function_establish_context_return:");
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_function_release_context_return:");
     LOG_DEVEL(LOG_LEVEL_DEBUG, "  status 0x%8.8x", status);
     uds_client_id = call_data->uds_client_id;
 
@@ -2719,6 +2738,109 @@ scard_handle_GetStatusChange_Return(struct stream *s, IRP *irp,
     LOG_DEVEL(LOG_LEVEL_DEBUG, "leaving");
 }
 
+
+/*****************************************************************************/
+int
+scard_function_connect_return(struct connect_call *call_data,
+                              struct stream *in_s,
+                              int len, unsigned int status)
+{
+    /* see [MS-RDPESC] 2.2.3.8
+     *
+     * IDL:-
+     *
+     * typedef struct _REDIR_SCARDCONTEXT {
+     *    [range(0,16)] unsigned long cbContext;
+     *    [unique] [size_is(cbContext)] byte *pbContext;
+     *    } REDIR_SCARDCONTEXT;
+     *
+     * typedef struct _REDIR_SCARDHANDLE {
+     *    REDIR_SCARDCONTEXT Context;
+     *    [range(0,16)] unsigned long cbHandle;
+     *    [size_is(cbHandle)] byte *pbHandle;
+     *    } REDIR_SCARDHANDLE;
+     *
+     * typedef struct _Connect_Return {
+     *    long ReturnCode;
+     *    REDIR_SCARDHANDLE hCard;
+     *    unsigned long dwActiveProtocol;
+     *    } Connect_Return;
+     *
+     * Type summary:-
+     *
+     * ReturnCode         32-bit word
+     * hCard.Context.cbContext  Unsigned 32-bit word
+     * hCard.Context.pbContext  Embedded full pointer to conformant
+     *                          array of bytes
+     * hCard.cbHandle  Unsigned 32-bit word
+     * hCard.pbHandle  Embedded full pointer to conformant array of bytes
+     * dwActiveProtocol   32-bit word
+     *
+     * NDR:-
+     *
+     * Offset   Decription
+     * 0        ReturnCode
+     * 4        hCard.Context.cbContext
+     * 8        hCard.Context.pbContext Referent Identifier
+     * 12       hCard.cbHandle
+     * 16       hCard.pbHandle Referent Identifier
+     * 20       dwActiveProtocol
+     * 24       length of context in bytes
+     * 28       Context data (up to 16 bytes)
+     * ??       length of handle in bytes
+     * ??       Handle data (up to 16 bytes)
+     */
+    int uds_client_id;
+    int ReturnCode = XSCARD_E_UNEXPECTED;
+    struct redir_scardhandle hCard = {0};
+    unsigned int app_hcard = 0;
+    unsigned int dwActiveProtocol = 0;
+
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_function_connect_return:");
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "  status 0x%8.8x", status);
+    uds_client_id = call_data->uds_client_id;
+
+    if (status != 0)
+    {
+        goto done;
+    }
+    if (!s_check_rem_and_log(in_s, 8 + 8 + 4 + 4 + 4 + 4 + 4 + 4 + 4,
+                             "[MS-RDPESC] EstablishContext_Return(1)"))
+    {
+        goto done;
+    }
+    in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.1 */
+    in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.2 */
+
+    in_uint32_le(in_s, ReturnCode);
+    in_uint32_le(in_s, hCard.Context.cbContext);
+    in_uint8s(in_s, 4); // Referent Identifier
+    in_uint32_le(in_s, hCard.cbHandle);
+    in_uint8s(in_s, 4); // Referent Identifier
+    in_uint32_le(in_s, dwActiveProtocol);
+    in_uint8s(in_s, 4); // context length copy
+    if (!s_check_rem_and_log(in_s, hCard.Context.cbContext,
+                             "[MS-RDPESC] EstablishContext_Return(2)"))
+    {
+        goto done;
+    }
+    in_uint8a(in_s, hCard.Context.pbContext, hCard.Context.cbContext);
+    in_align_s(in_s, 4);
+    if (!s_check_rem_and_log(in_s, hCard.cbHandle,
+                             "[MS-RDPESC] EstablishContext_Return(3)"))
+    {
+        goto done;
+    }
+    in_uint8a(in_s, hCard.pbHandle, hCard.cbHandle);
+    if (scard_alloc_card_handle(uds_client_id, &hCard, &app_hcard) != 0)
+    {
+        ReturnCode = XSCARD_E_NO_MEMORY;
+    }
+done:
+    return call_data->callback(uds_client_id,
+                               ReturnCode, app_hcard, dwActiveProtocol);
+}
+
 /**
  *
  *****************************************************************************/
@@ -2741,7 +2863,8 @@ scard_handle_Connect_Return(struct stream *s, IRP *irp,
     /* get OutputBufferLen */
     xstream_rd_u32_le(s, len);
 
-    scard_function_connect_return(irp->user_data, s, len, IoStatus);
+    scard_function_connect_return((struct connect_call *)irp->user_data,
+                                  s, len, IoStatus);
     devredir_irp_delete(irp);
 
     LOG_DEVEL(LOG_LEVEL_DEBUG, "leaving");

@@ -108,5 +108,23 @@ enum pcsc_message_code
 // 12     cBytes
 // 16     msz (UTF-8)
 //
+// *****************************************************************************
+//  C O N N E C T
+// *****************************************************************************
+// Request (See [MS-RDPESC] 2.2.2.14 and 2.2.1.3) :-
+// 0      Header, code SCARD_CONNECT
+// 8      hContext
+// 12     dwShareMode
+// 16     dwPreferredProtocols
+// 20     Length of szReader without terminator
+// 24     szReader (UTF-8). Terminator omitted
+//
+// Response (See [MS-RDPESC] 2.2.3.8) :-
+// Offset Value
+// 0      Header, code SCARD_CONNECT
+// 8      ReturnCode
+// 12     hCard
+// 16     dwActiveProtocol
+//
 
 #endif // XRDP_PCSC_H

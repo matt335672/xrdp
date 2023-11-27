@@ -379,19 +379,22 @@ SCardConnect(SCARDCONTEXT hContext, LPCSTR szReader, DWORD dwShareMode,
     offset = 0;
     SET_UINT32(msg, offset, hContext);
     offset += 4;
-    bytes = strlen(szReader);
-    if (bytes > 99)
-    {
-        LLOGLN(0, ("SCardConnect: error, name too long"));
-        return SCARD_F_INTERNAL_ERROR;
-    }
-    memcpy(msg + offset, szReader, bytes);
-    memset(msg + offset + bytes, 0, 100 - bytes);
-    offset += 100;
     SET_UINT32(msg, offset, dwShareMode);
     offset += 4;
     SET_UINT32(msg, offset, dwPreferredProtocols);
     offset += 4;
+    bytes = strlen(szReader);
+    if (bytes > 2047)
+    {
+        LLOGLN(0, ("SCardConnect: error, name too long"));
+        return SCARD_F_INTERNAL_ERROR;
+    }
+    SET_UINT32(msg, offset, bytes);
+    offset += 4;
+
+    memcpy(msg + offset, szReader, bytes);
+    offset += bytes;
+
     if (send_message(SCARD_CONNECT, msg, offset) != 0)
     {
         LLOGLN(0, ("SCardConnect: error, send_message"));
@@ -404,14 +407,14 @@ SCardConnect(SCARDCONTEXT hContext, LPCSTR szReader, DWORD dwShareMode,
         LLOGLN(0, ("SCardConnect: error, get_message"));
         return SCARD_F_INTERNAL_ERROR;
     }
-    if (code != SCARD_CONNECT)
+    if (code != SCARD_CONNECT || (bytes != 12))
     {
         LLOGLN(0, ("SCardConnect: error, bad code"));
         return SCARD_F_INTERNAL_ERROR;
     }
-    *phCard = GET_UINT32(msg, 0);
-    *pdwActiveProtocol = GET_UINT32(msg, 4);
-    status = GET_UINT32(msg, 8);
+    status = GET_UINT32(msg, 0);
+    *phCard = GET_UINT32(msg, 4);
+    *pdwActiveProtocol = GET_UINT32(msg, 8);
     LLOGLN(10, ("SCardConnect: got status 0x%8.8x hCard 0x%8.8x "
                 "dwActiveProtocol %d",
                 status, (int)*phCard, (int)*pdwActiveProtocol));
