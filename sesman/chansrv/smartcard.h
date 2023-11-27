@@ -23,8 +23,8 @@
 
 #include "arch.h"
 
-#ifndef _SMARTCARD_C
-#define _SMARTCARD_C
+#ifndef _SMARTCARD_H
+#define _SMARTCARD_H
 
 struct xrdp_scard_io_request
 {
@@ -266,4 +266,4 @@ int  scard_send_get_attrib(void *user_data, char *card, int card_bytes,
  *      SCardListReaderGroups - not supported
  *      SCardSetAttrib - not supported
  */
-#endif /* end #ifndef _SMARTCARD_C */
+#endif /* end #ifndef _SMARTCARD_H */

@@ -80,7 +80,9 @@ if XRDP_LIBPCSCLITE
 xrdp_chansrv_SOURCES += \
   smartcard.c \
   smartcard_pcsc.c \
-  smartcard_pcsc.h
+  smartcard_pcsc.h \
+  smartcard_data.c \
+  smartcard_data.h
 else
 xrdp_chansrv_SOURCES += \
   smartcard_dummy.c
