@@ -126,5 +126,24 @@ enum pcsc_message_code
 // 12     hCard
 // 16     dwActiveProtocol
 //
+// *****************************************************************************
+//  S T A T U S
+// *****************************************************************************
+// Request (See [MS-RDPESC] 2.2.2.18) :-
+// Offset Value
+// 0      Header, code SCARD_STATUS
+// 8      hCard
+//
+// Response (See [MS-RDPESC] 2.2.3.10) :-
+// Offset Value
+// 0      Header, code SCARD_STATUS
+// 8      ReturnCode
+// 12     dwState (MS-style - not a PCSCLite bitmask)
+// 16     dwProtocol
+// 20     cBytes
+// 24     cbAtrLen
+// 28     Friendly name of reader (UTF-8)
+// 28+cBytes cbAtr
+//
 
 #endif // XRDP_PCSC_H

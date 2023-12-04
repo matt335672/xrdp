@@ -560,17 +560,18 @@ SCardEndTransaction(SCARDHANDLE hCard, DWORD dwDisposition)
 
 /*****************************************************************************/
 PCSC_API LONG
-SCardStatus(SCARDHANDLE hCard, LPSTR mszReaderName, LPDWORD pcchReaderLen,
+SCardStatus(SCARDHANDLE hCard, LPSTR szReaderName, LPDWORD pcchReaderLen,
             LPDWORD pdwState, LPDWORD pdwProtocol, LPBYTE pbAtr,
             LPDWORD pcbAtrLen)
 {
-    char *msg;
+    char msg[8192];
     unsigned int code;
     unsigned int bytes;
-    int status;
-    int offset;
-    int cchReaderLen;
-    unsigned int to_copy;
+    unsigned int status;
+    unsigned int offset;
+    unsigned int cBytes;
+    unsigned int cbAtrLen;
+    char *reader_out = NULL;
 
     LLOGLN(10, ("SCardStatus:"));
     if (hCard == 0)
@@ -583,72 +584,116 @@ SCardStatus(SCARDHANDLE hCard, LPSTR mszReaderName, LPDWORD pcchReaderLen,
         LLOGLN(0, ("SCardStatus: error, not connected"));
         return SCARD_F_INTERNAL_ERROR;
     }
+
+    if (pcchReaderLen == NULL || pcbAtrLen == NULL ||
+            (*pcchReaderLen == SCARD_AUTOALLOCATE && szReaderName == NULL) ||
+            (*pcbAtrLen == SCARD_AUTOALLOCATE && pbAtr == NULL))
+    {
+        return SCARD_E_INVALID_PARAMETER;
+    }
+
     LLOGLN(10, ("  hCard 0x%8.8x", (int)hCard));
     LLOGLN(10, ("  cchReaderLen %d", (int)*pcchReaderLen));
     LLOGLN(10, ("  cbAtrLen %d", (int)*pcbAtrLen));
 
-    cchReaderLen = *pcchReaderLen;
-    msg = (char *) malloc(8192);
     SET_UINT32(msg, 0, hCard);
-    SET_UINT32(msg, 4, cchReaderLen);
-    SET_UINT32(msg, 8, *pcbAtrLen);
-    if (send_message(SCARD_STATUS, msg, 12) != 0)
+    if (send_message(SCARD_STATUS, msg, 4) != 0)
     {
         LLOGLN(0, ("SCardStatus: error, send_message"));
-        free(msg);
         return SCARD_F_INTERNAL_ERROR;
     }
-    bytes = 8192;
+    bytes = sizeof(msg);
     code = SCARD_STATUS;
-    if (get_message(&code, msg, &bytes) != 0)
+    if (get_message(&code, msg, &bytes) != 0 || (bytes < 20))
     {
         LLOGLN(0, ("SCardStatus: error, get_message"));
-        free(msg);
         return SCARD_F_INTERNAL_ERROR;
     }
     if (code != SCARD_STATUS)
     {
         LLOGLN(0, ("SCardStatus: error, bad code"));
-        free(msg);
         return SCARD_F_INTERNAL_ERROR;
     }
 
-    LLOGLN(10, ("SCardStatus: cchReaderLen in %d", (int)*pcchReaderLen));
+    // Get the fixed values
     offset = 0;
-    *pcchReaderLen = GET_UINT32(msg, offset);
-    LLOGLN(10, ("SCardStatus: cchReaderLen out %d", (int)*pcchReaderLen));
-    offset += 4;
-    if (cchReaderLen > 0)
-    {
-        to_copy = cchReaderLen - 1;
-        if (*pcchReaderLen < to_copy)
-        {
-            to_copy = *pcchReaderLen;
-        }
-        memcpy(mszReaderName, msg + offset, to_copy);
-        mszReaderName[to_copy] = 0;
-    }
-    LLOGLN(10, ("SCardStatus: mszReaderName out %s", mszReaderName));
-    offset += *pcchReaderLen;
-    *pdwState = GET_UINT32(msg, offset);
-    if (*pdwState == 1)
-    {
-        *pdwState = 0x34;
-    }
-    LLOGLN(10, ("SCardStatus: dwState %d", (int)*pdwState));
-    offset += 4;
-    *pdwProtocol = GET_UINT32(msg, offset);
-    LLOGLN(10, ("SCardStatus: dwProtocol %d", (int)*pdwProtocol));
-    offset += 4;
-    *pcbAtrLen = GET_UINT32(msg, offset);
-    offset += 4;
-    LLOGLN(10, ("SCardStatus: cbAtrLen %d", (int)*pcbAtrLen));
-    memcpy(pbAtr, msg + offset, *pcbAtrLen);
-    offset += *pcbAtrLen;
     status = GET_UINT32(msg, offset);
-    LLOGLN(10, ("SCardStatus: status %d", status));
     offset += 4;
-    free(msg);
+    if (pdwState != NULL)
+    {
+        // PCSCLite uses a bitmask with log-to-base-2 corresponding
+        // to the MS values in [MS-RDPESC]
+        unsigned int ms_state = GET_UINT32(msg, offset);
+        *pdwState = (1 << ms_state);
+    }
+    offset += 4;
+    if (pdwProtocol != NULL)
+    {
+        *pdwProtocol = GET_UINT32(msg, offset);
+    }
+    offset += 4;
+    cBytes = GET_UINT32(msg, offset);
+    offset += 4;
+    cbAtrLen = GET_UINT32(msg, offset);
+    offset += 4;
+
+    // All the strings available?
+    if (offset + cBytes + cbAtrLen > bytes)
+    {
+        return SCARD_F_INTERNAL_ERROR;
+    }
+
+    // Allocate memory if required
+    if (status == SCARD_S_SUCCESS)
+    {
+        if (*pcchReaderLen == SCARD_AUTOALLOCATE)
+        {
+            if ((reader_out = (char *)malloc(cBytes + 1)) == NULL)
+            {
+                return SCARD_E_NO_MEMORY;
+            }
+            *(char **)szReaderName = reader_out;
+            *pcchReaderLen = cBytes + 1;
+        }
+
+        if (*pcchReaderLen > cBytes)
+        {
+            memcpy(szReaderName, msg + offset, cBytes);
+            szReaderName[cBytes] = '\0';
+            *pcchReaderLen = cBytes;
+        }
+        else
+        {
+            status = SCARD_E_INSUFFICIENT_BUFFER;
+        }
+        offset += cBytes;
+        LLOGLN(10, ("SCardStatus: szReaderName out %s", szReaderName));
+
+        if (*pcbAtrLen == SCARD_AUTOALLOCATE)
+        {
+            char *atr_out;
+            if ((atr_out = (char *)malloc(cbAtrLen)) == NULL)
+            {
+                free(reader_out);
+                return SCARD_E_NO_MEMORY;
+            }
+            *(char **)pbAtr = atr_out;
+            *pcbAtrLen = cbAtrLen;
+        }
+
+        if (*pcbAtrLen >= cbAtrLen)
+        {
+            memcpy(pbAtr, msg + offset, cbAtrLen);
+            *pcbAtrLen = cbAtrLen;
+        }
+        else
+        {
+            status = SCARD_E_INSUFFICIENT_BUFFER;
+        }
+        offset += cbAtrLen;
+        LLOGLN(10, ("SCardStatus: pbAtr out %s", pbAtr));
+    }
+
     return status;
 }
 
