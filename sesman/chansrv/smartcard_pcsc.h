@@ -53,10 +53,6 @@ int scard_function_get_status_change_return(void *user_data,
         struct stream *in_s,
         int len, int status);
 
-int scard_function_status_return(void *user_data,
-                                 struct stream *in_s,
-                                 int len, int status);
-
 int scard_function_begin_transaction_return(void *user_data,
         struct stream *in_s,
         int len, int status);
