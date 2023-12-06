@@ -384,7 +384,7 @@ scard_send_end_transaction(struct scard_client *client,
                            struct hcard_and_disposition_call *call_data);
 
 /**
- * Sends a connect call to the RDP service
+ * Sends a status call to the RDP service
  *
  * @param client client
  * @param call_data Info about the call
@@ -395,10 +395,19 @@ scard_send_end_transaction(struct scard_client *client,
 void
 scard_send_status(struct scard_client *client,
                   struct status_call *call_data);
-int  scard_send_disconnect(void *user_data,
-                           char *context, int context_bytes,
-                           char *card, int card_bytes,
-                           int dwDisposition);
+
+/**
+ * Sends a disconnect call to the RDP service
+ *
+ * @param client client
+ * @param call_data Info about the call
+ *
+ * The call_data must be on the heap. After this call,
+ * ownership of the call_data is taken away from the caller.
+ */
+void
+scard_send_disconnect(struct scard_client *client,
+                      struct hcard_and_disposition_call *call_data);
 
 int  scard_send_transmit(void *user_data,
                          char *context, int context_bytes,

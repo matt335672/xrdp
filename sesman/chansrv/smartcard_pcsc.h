@@ -49,10 +49,6 @@ int scard_function_reconnect_return(void *user_data,
                                     struct stream *in_s,
                                     int len, int status);
 
-int scard_function_disconnect_return(void *user_data,
-                                     struct stream *in_s,
-                                     int len, int status);
-
 int scard_function_cancel_return(void *user_data,
                                  struct stream *in_s,
                                  int len, int status);

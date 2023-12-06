@@ -580,74 +580,47 @@ scard_process_connect(struct trans *con, struct stream *in_s)
     scard_send_connect(scard_client, call_data);
     return 0;
 }
+
+/*****************************************************************************/
+static int
+send_disconnect_return(struct scard_client *client, unsigned int ReturnCode)
+{
+    return send_long_return(client, SCARD_DISCONNECT, ReturnCode);
+}
+
 /*****************************************************************************/
 /* returns error */
 int
 scard_process_disconnect(struct trans *con, struct stream *in_s)
 {
-    int hCard;
-    int dwDisposition;
     struct pcsc_uds_client *uds_client;
-    void *user_data = 0;
-    struct pcsc_context *lcontext;
-    struct pcsc_card *lcard;
+    struct scard_client *scard_client;
+    struct hcard_and_disposition_call *call_data;
 
     LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_disconnect:");
     uds_client = (struct pcsc_uds_client *) (con->callback_data);
-    in_uint32_le(in_s, hCard);
-    in_uint32_le(in_s, dwDisposition);
-    //user_data = (void *) (tintptr) (uds_client->uds_client_id);
-    lcard = get_pcsc_card_by_app_card(uds_client, hCard, &lcontext);
-    if ((lcontext == 0) || (lcard == 0))
+    scard_client = uds_client->scard_client;
+
+    if (!s_check_rem_and_log(in_s, 8, "Reading SCARD_DISCONNECT"))
     {
-        LOG(LOG_LEVEL_ERROR, "scard_process_disconnect: "
-            "get_pcsc_card_by_app_card failed");
-        return 1;
+        return send_disconnect_return(scard_client, XSCARD_F_INTERNAL_ERROR);
     }
-    scard_send_disconnect(user_data, lcontext->context.pbContext,
-                          lcontext->context.cbContext,
-                          lcard->card, lcard->card_bytes, dwDisposition);
+
+    /* Allocate a block to describe the call */
+    if ((call_data = g_new0(struct hcard_and_disposition_call, 1)) == NULL)
+    {
+        return send_disconnect_return(scard_client, XSCARD_E_NO_MEMORY);
+    }
+
+    call_data->callback = send_disconnect_return;
+    in_uint32_le(in_s, call_data->app_hcard);
+    in_uint32_le(in_s, call_data->dwDisposition);
+    LOG_DEVEL(LOG_LEVEL_DEBUG,
+              "scard_process_disconnect: hCard 0x%8.8x dwDisposition 0x%8.8x",
+              call_data->app_hcard, call_data->dwDisposition);
+
+    scard_send_disconnect(scard_client, call_data);
     return 0;
-}
-
-/*****************************************************************************/
-int
-scard_function_disconnect_return(void *user_data,
-                                 struct stream *in_s,
-                                 int len, int status)
-{
-    int bytes;
-    int uds_client_id = 0;
-    struct stream *out_s;
-    struct pcsc_uds_client *uds_client;
-    struct trans *con;
-
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_function_disconnect_return:");
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "  status 0x%8.8x", status);
-    //uds_client_id = (int) (tintptr) user_data;
-    uds_client = (struct pcsc_uds_client *)
-                 get_uds_client_by_id(uds_client_id);
-    if (uds_client == 0)
-    {
-        LOG(LOG_LEVEL_ERROR, "scard_function_disconnect_return: "
-            "get_uds_client_by_id failed to find uds_client_id %d",
-            uds_client_id);
-        return 1;
-    }
-    con = uds_client->con;
-    out_s = trans_get_out_s(con, 8192);
-    if (out_s == NULL)
-    {
-        return 1;
-    }
-    s_push_layer(out_s, iso_hdr, 8);
-    out_uint32_le(out_s, status); /* XSCARD_S_SUCCESS status */
-    s_mark_end(out_s);
-    bytes = (int) (out_s->end - out_s->data);
-    s_pop_layer(out_s, iso_hdr);
-    out_uint32_le(out_s, bytes - 8);
-    out_uint32_le(out_s, SCARD_DISCONNECT);
-    return trans_force_write(con);
 }
 
 /*****************************************************************************/

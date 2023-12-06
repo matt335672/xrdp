@@ -125,6 +125,20 @@ enum pcsc_message_code
 // 16     dwActiveProtocol
 //
 // *****************************************************************************
+//  D I S C O N N E C T
+// *****************************************************************************
+// Request (See [MS-RDPESC] 2.2.2.16) :-
+// Offset Value
+// 0      Header, code SCARD_DISCONNECT
+// 8      hCard
+// 12     dwDisposition
+//
+// Response (See [MS-RDPESC] 2.2.3.3) :-
+// Offset Value
+// 0      Header, code SCARD_DISCONNECT
+// 8      ReturnCode
+//
+// *****************************************************************************
 //  S T A T U S
 // *****************************************************************************
 // Request (See [MS-RDPESC] 2.2.2.18) :-
@@ -148,12 +162,12 @@ enum pcsc_message_code
 // *****************************************************************************
 // Request (See [MS-RDPESC] 2.2.2.16) :-
 // Offset Value
-// 0      Header, code SCARD_STATUS
+// 0      Header, code SCARD_BEGIN_TRANSACTION
 // 8      hCard
 //
 // Response (See [MS-RDPESC] 2.2.3.3) :-
 // Offset Value
-// 0      Header, code SCARD_STATUS
+// 0      Header, code SCARD_BEGIN_TRANSACTION
 // 8      ReturnCode
 //
 // *****************************************************************************
@@ -161,13 +175,13 @@ enum pcsc_message_code
 // *****************************************************************************
 // Request (See [MS-RDPESC] 2.2.2.16) :-
 // Offset Value
-// 0      Header, code SCARD_STATUS
+// 0      Header, code SCARD_END_TRANSACTION
 // 8      hCard
 // 12     dwDisposition
 //
 // Response (See [MS-RDPESC] 2.2.3.3) :-
 // Offset Value
-// 0      Header, code SCARD_STATUS
+// 0      Header, code SCARD_END_TRANSACTION
 // 8      ReturnCode
 //
 
