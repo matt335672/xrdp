@@ -29,18 +29,6 @@ int scard_pcsc_check_wait_objs(void);
 int scard_pcsc_init(void);
 int scard_pcsc_deinit(void);
 
-/* TODO : Put these in separate module */
-int scard_alloc_new_app_context(int uds_client_id,
-                                const struct redir_scardcontext *context,
-                                unsigned int *app_context);
-
-int scard_free_app_context(int uds_client_id,
-                           const struct redir_scardcontext *context);
-
-int scard_alloc_card_handle(int uds_client_id,
-                            const struct redir_scardhandle *handle,
-                            unsigned int *app_context);
-
 int scard_function_transmit_return(void *user_data,
                                    struct stream *in_s,
                                    int len, int status);
@@ -50,10 +38,6 @@ int scard_function_control_return(void *user_data,
                                   int len, int status);
 
 int scard_function_get_status_change_return(void *user_data,
-        struct stream *in_s,
-        int len, int status);
-
-int scard_function_end_transaction_return(void *user_data,
         struct stream *in_s,
         int len, int status);
 

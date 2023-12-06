@@ -370,10 +370,19 @@ void
 scard_send_begin_transaction(struct scard_client *client,
                              struct hcard_and_disposition_call *call_data);
 
-int  scard_send_end_transaction(void *user_data,
-                                char *context, int context_bytes,
-                                char *card, int card_bytes,
-                                tui32 dwDisposition);
+/**
+ * Sends an end transaction call to the RDP service
+ *
+ * @param client client
+ * @param call_data Info about the call
+ *
+ * The call_data must be on the heap. After this call,
+ * ownership of the call_data is taken away from the caller.
+ */
+void
+scard_send_end_transaction(struct scard_client *client,
+                           struct hcard_and_disposition_call *call_data);
+
 /**
  * Sends a connect call to the RDP service
  *
