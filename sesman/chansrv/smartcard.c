@@ -458,6 +458,7 @@ scard_send_establish_context(struct scard_client *client,
         {
             /* send IRP to client */
             scard_send_EstablishContext(s, call_data);
+            free_stream(s);
         }
     }
 }
@@ -512,6 +513,7 @@ scard_send_release_context(struct scard_client *client,
         {
             /* send IRP to client */
             scard_send_ReleaseContext(s, call_data, &Context);
+            free_stream(s);
         }
     }
 }
@@ -601,6 +603,7 @@ scard_send_list_readers(struct scard_client *client,
         {
             /* send IRP to client */
             scard_send_ListReaders(s, call_data, &Context);
+            free_stream(s);
         }
     }
 }
@@ -699,6 +702,7 @@ scard_send_connect(struct scard_client *client,
         {
             /* send IRP to client */
             scard_send_Connect(s, call_data, &Context);
+            free_stream(s);
         }
     }
 }
@@ -857,6 +861,7 @@ scard_send_status(struct scard_client *client,
         {
             /* send IRP to client */
             scard_send_Status(s, call_data, &hCard);
+            free_stream(s);
         }
     }
 }
@@ -1328,8 +1333,6 @@ scard_send_EstablishContext(struct stream *s,
 
     /* send to client */
     send_channel_data(g_rdpdr_chan_id, s->data, bytes);
-
-    free_stream(s);
 }
 
 /**
@@ -1365,8 +1368,6 @@ scard_send_ReleaseContext(struct stream *s,
 
     /* send to client */
     send_channel_data(g_rdpdr_chan_id, s->data, bytes);
-
-    free_stream(s);
 }
 
 /**
@@ -1427,8 +1428,6 @@ scard_send_IsContextValid(IRP *irp, const struct redir_scardcontext *context)
 
     /* send to client */
     send_channel_data(g_rdpdr_chan_id, s->data, bytes);
-
-    free_stream(s);
 }
 
 /**
@@ -1538,11 +1537,8 @@ scard_send_ListReaders(struct stream *s,
     bytes = (int) (s->end - s->data);
 
     /* send to client */
-    send_channel_data(g_rdpdr_chan_id, s->data, bytes);
-
     LOG_DEVEL_HEXDUMP(LOG_LEVEL_TRACE, "scard_send_ListReaders:", s->data, bytes);
-
-    free_stream(s);
+    send_channel_data(g_rdpdr_chan_id, s->data, bytes);
 }
 
 /**
@@ -1708,11 +1704,8 @@ scard_send_GetStatusChange(IRP *irp, char *context, int context_bytes,
     bytes = (int) (s->end - s->data);
 
     /* send to client */
-    send_channel_data(g_rdpdr_chan_id, s->data, bytes);
-
     LOG_DEVEL_HEXDUMP(LOG_LEVEL_TRACE, "scard_send_GetStatusChange:", s->data, bytes);
-
-    free_stream(s);
+    send_channel_data(g_rdpdr_chan_id, s->data, bytes);
 }
 
 /**
@@ -1807,8 +1800,6 @@ scard_send_Connect(struct stream *s, struct connect_call *call_data,
 
     /* send to client */
     send_channel_data(g_rdpdr_chan_id, s->data, bytes);
-
-    free_stream(s);
 }
 
 /**
@@ -1883,8 +1874,6 @@ scard_send_Reconnect(IRP *irp, char *context, int context_bytes,
 
     /* send to client */
     send_channel_data(g_rdpdr_chan_id, s->data, bytes);
-
-    free_stream(s);
 }
 
 /**
@@ -1949,8 +1938,6 @@ scard_send_BeginTransaction(IRP *irp, char *context, int context_bytes,
 
     /* send to client */
     send_channel_data(g_rdpdr_chan_id, s->data, bytes);
-
-    free_stream(s);
 }
 
 /**
@@ -2017,8 +2004,6 @@ scard_send_EndTransaction(IRP *irp, char *context, int context_bytes,
 
     /* send to client */
     send_channel_data(g_rdpdr_chan_id, s->data, bytes);
-
-    free_stream(s);
 }
 
 /**
@@ -2117,8 +2102,6 @@ scard_send_Status(struct stream *s, struct status_call *call_data,
 
     /* send to client */
     send_channel_data(g_rdpdr_chan_id, s->data, bytes);
-
-    free_stream(s);
 }
 
 /**
@@ -2183,8 +2166,6 @@ scard_send_Disconnect(IRP *irp, char *context, int context_bytes,
 
     /* send to client */
     send_channel_data(g_rdpdr_chan_id, s->data, bytes);
-
-    free_stream(s);
 }
 
 /**
@@ -2370,11 +2351,9 @@ scard_send_Transmit(IRP *irp, char *context, int context_bytes,
     bytes = (int) (s->end - s->data);
 
     /* send to client */
+    LOG_DEVEL_HEXDUMP(LOG_LEVEL_TRACE, "scard_send_Transmit:", s->data, bytes);
     send_channel_data(g_rdpdr_chan_id, s->data, bytes);
 
-    LOG_DEVEL_HEXDUMP(LOG_LEVEL_TRACE, "scard_send_Transmit:", s->data, bytes);
-
-    free_stream(s);
     return 0;
 }
 
@@ -2449,8 +2428,6 @@ scard_send_Control(IRP *irp, char *context, int context_bytes,
 
     /* send to client */
     send_channel_data(g_rdpdr_chan_id, s->data, bytes);
-
-    free_stream(s);
     return 0;
 }
 
@@ -2501,8 +2478,6 @@ scard_send_Cancel(IRP *irp, const struct redir_scardcontext *context)
 
     /* send to client */
     send_channel_data(g_rdpdr_chan_id, s->data, bytes);
-
-    free_stream(s);
     return 0;
 }
 
@@ -2565,8 +2540,6 @@ scard_send_GetAttrib(IRP *irp, char *card, int card_bytes, READER_STATE *rs)
 
     /* send to client */
     send_channel_data(g_rdpdr_chan_id, s->data, bytes);
-
-    free_stream(s);
     return 0;
 }
 
