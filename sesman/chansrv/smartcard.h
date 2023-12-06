@@ -227,6 +227,26 @@ struct status_call
     unsigned int app_hcard;
 };
 
+/**
+ * Use this struct to make a disconnect/begin transaction/end transaction call
+ *
+ * Fill in all fields (apart from p) and pass to
+ * scard_send_xxx(). The result will be received via the
+ * callback, provided the client is still active.
+ */
+struct hcard_and_disposition_call
+{
+    struct common_call_private p;
+
+    /** How to pass the result back to the client */
+    int (*callback)(struct scard_client *client,
+                    unsigned int ReturnCode);
+
+    /* See 2.2.2.16 */
+    unsigned int app_hcard;
+    unsigned int dwDisposition; // Ignored on BeginTransaction
+};
+
 void scard_device_announce(tui32 device_id);
 int  scard_get_wait_objs(tbus *objs, int *count, int *timeout);
 int  scard_check_wait_objs(void);
@@ -337,9 +357,19 @@ int  scard_send_reconnect(void *user_data,
                           char *card, int card_bytes,
                           READER_STATE *rs);
 
-int  scard_send_begin_transaction(void *user_data,
-                                  char *context, int context_bytes,
-                                  char *card, int card_bytes);
+/**
+ * Sends a begin transaction call to the RDP service
+ *
+ * @param client client
+ * @param call_data Info about the call
+ *
+ * The call_data must be on the heap. After this call,
+ * ownership of the call_data is taken away from the caller.
+ */
+void
+scard_send_begin_transaction(struct scard_client *client,
+                             struct hcard_and_disposition_call *call_data);
+
 int  scard_send_end_transaction(void *user_data,
                                 char *context, int context_bytes,
                                 char *card, int card_bytes,

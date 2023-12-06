@@ -651,75 +651,48 @@ scard_function_disconnect_return(void *user_data,
 }
 
 /*****************************************************************************/
-/* returns error */
-int
-scard_process_begin_transaction(struct trans *con, struct stream *in_s)
+static int
+send_begin_transaction_return(struct scard_client *client,
+                              unsigned int ReturnCode)
 {
-    int hCard;
-    struct pcsc_uds_client *uds_client;
-    void *user_data = 0;
-    struct pcsc_card *lcard;
-    struct pcsc_context *lcontext;
-
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_begin_transaction:");
-    uds_client = (struct pcsc_uds_client *) (con->callback_data);
-    in_uint32_le(in_s, hCard);
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_begin_transaction: hCard 0x%8.8x", hCard);
-    //user_data = (void *) (tintptr) (uds_client->uds_client_id);
-    lcard = get_pcsc_card_by_app_card(uds_client, hCard, &lcontext);
-    if ((lcard == 0) || (lcontext == 0))
-    {
-        LOG(LOG_LEVEL_ERROR, "scard_process_begin_transaction: "
-            "get_pcsc_card_by_app_card failed");
-        return 1;
-    }
-    scard_send_begin_transaction(user_data,
-                                 lcontext->context.pbContext,
-                                 lcontext->context.cbContext,
-                                 lcard->card, lcard->card_bytes);
-    return 0;
+    return send_long_return(client, SCARD_BEGIN_TRANSACTION, ReturnCode);
 }
 
 /*****************************************************************************/
 /* returns error */
 int
-scard_function_begin_transaction_return(void *user_data,
-                                        struct stream *in_s,
-                                        int len, int status)
+scard_process_begin_transaction(struct trans *con, struct stream *in_s)
 {
-    struct stream *out_s;
-    int bytes;
-    int uds_client_id;
     struct pcsc_uds_client *uds_client;
-    struct trans *con;
+    struct scard_client *scard_client;
+    struct hcard_and_disposition_call *call_data;
 
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_function_begin_transaction_return:");
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "  status 0x%8.8x", status);
-    uds_client_id = (int) (tintptr) user_data;
-    uds_client = (struct pcsc_uds_client *)
-                 get_uds_client_by_id(uds_client_id);
-    if (uds_client == 0)
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_begin_transaction:");
+    uds_client = (struct pcsc_uds_client *) (con->callback_data);
+    scard_client = uds_client->scard_client;
+
+    if (!s_check_rem_and_log(in_s, 4, "Reading SCARD_BEGIN_TRANSACTION"))
     {
-        LOG(LOG_LEVEL_ERROR, "scard_function_begin_transaction_return: "
-            "get_uds_client_by_id failed to find uds_client_id %d",
-            uds_client_id);
-        return 1;
+        return send_begin_transaction_return(scard_client,
+                                             XSCARD_F_INTERNAL_ERROR);
     }
-    con = uds_client->con;
-    out_s = trans_get_out_s(con, 8192);
-    if (out_s == NULL)
+
+    /* Allocate a block to describe the call */
+    if ((call_data = g_new0(struct hcard_and_disposition_call, 1)) == NULL)
     {
-        return 1;
+        return send_begin_transaction_return(scard_client, XSCARD_E_NO_MEMORY);
     }
-    s_push_layer(out_s, iso_hdr, 8);
-    out_uint32_le(out_s, status); /* XSCARD_S_SUCCESS status */
-    s_mark_end(out_s);
-    bytes = (int) (out_s->end - out_s->data);
-    s_pop_layer(out_s, iso_hdr);
-    out_uint32_le(out_s, bytes - 8);
-    out_uint32_le(out_s, SCARD_BEGIN_TRANSACTION);
-    return trans_force_write(con);
+
+    call_data->callback = send_begin_transaction_return;
+    in_uint32_le(in_s, call_data->app_hcard);
+    LOG_DEVEL(LOG_LEVEL_DEBUG,
+              "scard_process_begin_transaction: hCard 0x%8.8x",
+              call_data->app_hcard);
+
+    scard_send_begin_transaction(scard_client, call_data);
+    return 0;
 }
+
 
 /*****************************************************************************/
 /* returns error */

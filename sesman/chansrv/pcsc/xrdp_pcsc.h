@@ -143,5 +143,32 @@ enum pcsc_message_code
 // 28     Friendly name of reader (UTF-8)
 // 28+cBytes cbAtr
 //
+// *****************************************************************************
+//  B E G I N   T R A N S A C T I O N
+// *****************************************************************************
+// Request (See [MS-RDPESC] 2.2.2.16) :-
+// Offset Value
+// 0      Header, code SCARD_STATUS
+// 8      hCard
+//
+// Response (See [MS-RDPESC] 2.2.3.3) :-
+// Offset Value
+// 0      Header, code SCARD_STATUS
+// 8      ReturnCode
+//
+// *****************************************************************************
+//  E N D   T R A N S A C T I O N
+// *****************************************************************************
+// Request (See [MS-RDPESC] 2.2.2.16) :-
+// Offset Value
+// 0      Header, code SCARD_STATUS
+// 8      hCard
+// 12     dwDisposition
+//
+// Response (See [MS-RDPESC] 2.2.3.3) :-
+// Offset Value
+// 0      Header, code SCARD_STATUS
+// 8      ReturnCode
+//
 
 #endif // XRDP_PCSC_H

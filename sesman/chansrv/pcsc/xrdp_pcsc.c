@@ -486,11 +486,6 @@ SCardBeginTransaction(SCARDHANDLE hCard)
     int status;
 
     LLOGLN(10, ("SCardBeginTransaction: hCard 0x%8.8x", (int)hCard));
-    if (hCard == 0)
-    {
-        LLOGLN(0, ("SCardBeginTransaction: error, bad hCard"));
-        return SCARD_F_INTERNAL_ERROR;
-    }
     if (g_sck == -1)
     {
         LLOGLN(0, ("SCardBeginTransaction: error, not connected"));

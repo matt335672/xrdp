@@ -94,8 +94,8 @@
 #define SCARD_IOCTL_CONNECTW                 0x000900B0 /* ConnectW             */
 #define SCARD_IOCTL_RECONNECT                0x000900B4 /* Reconnect            */
 #define SCARD_IOCTL_DISCONNECT               0x000900B8 /* Disconnect           */
-#define SCARD_IOCTL_BEGIN_TRANSACTION        0x000900BC /* BeginTransaction     */
-#define SCARD_IOCTL_END_TRANSACTION          0x000900C0 /* EndTransaction       */
+#define SCARD_IOCTL_BEGINTRANSACTION         0x000900BC /* BeginTransaction     */
+#define SCARD_IOCTL_ENDTRANSACTION           0x000900C0 /* EndTransaction       */
 #define SCARD_IOCTL_STATE                    0x000900C4 /* State                */
 #define SCARD_IOCTL_STATUSA                  0x000900C8 /* StatusA              */
 #define SCARD_IOCTL_STATUSW                  0x000900CC /* StatusW              */
@@ -162,16 +162,20 @@ static void scard_send_GetStatusChange(IRP *irp,
                                        int wide,
                                        tui32 timeout, tui32 num_readers,
                                        READER_STATE *rsa);
-static void scard_send_Connect(struct stream *s,
-                               struct connect_call *call_data,
-                               const struct redir_scardcontext *context);
+static void
+scard_send_Connect(struct stream *s,
+                   struct connect_call *call_data,
+                   const struct redir_scardcontext *context);
+
 static void scard_send_Reconnect(IRP *irp,
                                  char *context, int context_bytes,
                                  char *card, int card_bytes,
                                  READER_STATE *rs);
-static void scard_send_BeginTransaction(IRP *irp,
-                                        char *context, int context_bytes,
-                                        char *card, int card_bytes);
+static void
+scard_send_HCardAndDisposition(struct stream *s,
+                               struct hcard_and_disposition_call *call_data,
+                               const struct redir_scardhandle *hCard);
+
 static void scard_send_EndTransaction(IRP *irp,
                                       char *context, int context_bytes,
                                       char *card, int card_bytes,
@@ -234,9 +238,10 @@ static void scard_handle_Reconnect_Return(struct stream *s, IRP *irp,
         tui32 DeviceId, tui32 CompletionId,
         tui32 IoStatus);
 
-static void scard_handle_BeginTransaction_Return(struct stream *s, IRP *irp,
-        tui32 DeviceId, tui32 CompletionId,
-        tui32 IoStatus);
+static int
+scard_function_begin_transaction_return(struct scard_client *client,
+                                        void *vcall_data, struct stream *in_s,
+                                        unsigned int len, unsigned int status);
 
 static void scard_handle_EndTransaction_Return(struct stream *s, IRP *irp,
         tui32 DeviceId,
@@ -749,29 +754,56 @@ scard_send_reconnect(void *call_data, char *context, int context_bytes,
  *
  * @param  con   connection to client
  *****************************************************************************/
-int
-scard_send_begin_transaction(void *call_data, char *context, int context_bytes,
-                             char *card, int card_bytes)
+void
+scard_send_begin_transaction(struct scard_client *client,
+                             struct hcard_and_disposition_call *call_data)
 {
     IRP *irp;
+    struct stream *s;
+    struct redir_scardhandle hCard;
 
+    /* Set up common_call_private data for the return */
+    call_data->p.client_id = scdata_get_client_id(client);
+    call_data->p.unmarshall_callback = scard_function_begin_transaction_return;
+
+    /* Get the RDP-level context */
+    if (!scdata_lookup_card_mapping(client,
+                                    call_data->app_hcard, &hCard))
+    {
+        call_data->callback(client, XSCARD_E_INVALID_HANDLE);
+        free(call_data);
+    }
     /* setup up IRP */
-    if ((irp = devredir_irp_new()) == NULL)
+    else if ((irp = devredir_irp_new()) == NULL)
     {
         LOG_DEVEL(LOG_LEVEL_ERROR, "system out of memory");
-        return 1;
+        call_data->callback(client, XSCARD_E_NO_MEMORY);
+        free(call_data);
     }
+    else
+    {
+        irp->scard_index = g_scard_index;
+        irp->CompletionId = g_completion_id++;
+        irp->DeviceId = g_device_id;
+        irp->callback = scard_handle_irp_completion;
+        /* Pass ownership of the call_data to the IRP */
+        irp->user_data = call_data;
+        irp->extra_destructor = devredir_irp_free_user_data;
 
-    irp->scard_index = g_scard_index;
-    irp->CompletionId = g_completion_id++;
-    irp->DeviceId = g_device_id;
-    irp->callback = scard_handle_BeginTransaction_Return;
-    irp->user_data = call_data;
-
-    /* send IRP to client */
-    scard_send_BeginTransaction(irp, context, context_bytes, card, card_bytes);
-
-    return 0;
+        s = scard_make_new_ioctl(irp, SCARD_IOCTL_BEGINTRANSACTION, 64);
+        if (s == NULL)
+        {
+            LOG_DEVEL(LOG_LEVEL_ERROR, "scard_make_new_ioctl failed");
+            call_data->callback(client, XSCARD_E_NO_MEMORY);
+            devredir_irp_delete(irp);
+        }
+        else
+        {
+            /* send IRP to client */
+            scard_send_HCardAndDisposition(s, call_data, &hCard);
+            free_stream(s);
+        }
+    }
 }
 
 /**
@@ -1879,45 +1911,26 @@ scard_send_Reconnect(IRP *irp, char *context, int context_bytes,
  * @param  con   connection to client
  *****************************************************************************/
 static void
-scard_send_BeginTransaction(IRP *irp, char *context, int context_bytes,
-                            char *card, int card_bytes)
+scard_send_HCardAndDisposition(struct stream *s,
+                               struct hcard_and_disposition_call *call_data,
+                               const struct redir_scardhandle *hCard)
 {
-    /* see [MS-RDPESC] 4.9 */
+    int bytes;
+    /* see [MS-RDPESC] 2.2.2.16 */
 
-    SMARTCARD     *sc;
-    struct stream *s;
-    int            bytes;
-
-    if ((sc = smartcards[irp->scard_index]) == NULL)
-    {
-        LOG_DEVEL(LOG_LEVEL_ERROR, "smartcards[%d] is NULL", irp->scard_index);
-        return;
-    }
-
-    if ((s = scard_make_new_ioctl(irp, SCARD_IOCTL_BEGIN_TRANSACTION, 4096)) == NULL)
-    {
-        LOG_DEVEL(LOG_LEVEL_ERROR, "scard_make_new_ioctl failed");
-        return;
-    }
-
+    /* Private Header ([MS-RPCE] 2.2.6.2 */
     s_push_layer(s, mcs_hdr, 4); /* bytes, set later */
     out_uint32_le(s, 0x00000000);
-    out_uint32_le(s, context_bytes);
-    out_uint32_le(s, 0x00020000);
-    out_uint32_le(s, card_bytes);
-    out_uint32_le(s, 0x00020004);
-    out_uint32_le(s, 0x00000000);
 
-    /* insert context */
-    out_uint32_le(s, context_bytes);
-    out_uint8a(s, context, context_bytes);
+    out_redir_scardhandle_part1(s, hCard, 0x20000, 0x20004);
 
-    /* insert card */
-    out_uint32_le(s, card_bytes);
-    out_uint8a(s, card, card_bytes);
+    // unsigned long dwDisposition;
+    out_uint32_le(s, call_data->dwDisposition);
 
-    out_uint32_le(s, 0x00000000);
+    // Now add the data pointed to by the referents
+    out_redir_scardhandle_part2(s, hCard);
 
+    out_align_s(s, 8); // [MS-RPCE] 2.2.6.2 */
     s_mark_end(s);
 
     s_pop_layer(s, mcs_hdr);
@@ -1960,7 +1973,7 @@ scard_send_EndTransaction(IRP *irp, char *context, int context_bytes,
         return;
     }
 
-    if ((s = scard_make_new_ioctl(irp, SCARD_IOCTL_END_TRANSACTION, 4096)) == NULL)
+    if ((s = scard_make_new_ioctl(irp, SCARD_IOCTL_ENDTRANSACTION, 4096)) == NULL)
     {
         LOG_DEVEL(LOG_LEVEL_ERROR, "scard_make_new_ioctl failed");
         return;
@@ -2958,30 +2971,51 @@ scard_handle_Reconnect_Return(struct stream *s, IRP *irp,
     LOG_DEVEL(LOG_LEVEL_DEBUG, "leaving");
 }
 
-/**
- *
- *****************************************************************************/
-static void
-scard_handle_BeginTransaction_Return(struct stream *s, IRP *irp,
-                                     tui32 DeviceId, tui32 CompletionId,
-                                     tui32 IoStatus)
+/*****************************************************************************/
+/* returns error */
+static int
+scard_function_begin_transaction_return(struct scard_client *client,
+                                        void *vcall_data, struct stream *in_s,
+                                        unsigned int len, unsigned int status)
 {
-    tui32 len;
+    /* see [MS-RDPESC] 2.2.3.3
+     *
+     * IDL:-
+     * typedef struct _long_Return {
+     *     long ReturnCode;
+     * } long_Return;*
+     *
+     * Type summary:-
+     *
+     * ReturnCode         32-bit word
+     *
+     * NDR:-
+     *
+     * Offset   Decription
+     * 0        ReturnCode
+     */
+    struct hcard_and_disposition_call *call_data;
+    call_data = (struct hcard_and_disposition_call *)vcall_data;
+    int ReturnCode = XSCARD_E_UNEXPECTED;
 
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "entered");
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_function_begin_transaction_return:");
 
-    /* sanity check */
-    if ((DeviceId != irp->DeviceId) || (CompletionId != irp->CompletionId))
+    if (status == 0)
     {
-        LOG_DEVEL(LOG_LEVEL_ERROR, "DeviceId/CompletionId do not match those in IRP");
-        return;
+        if (s_check_rem_and_log(in_s, 8 + 8 + 4,
+                                "[MS-RDPESC] Long_Return"))
+        {
+            in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.1 */
+            in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.2 */
+
+            in_uint32_le(in_s, ReturnCode);
+        }
+        LOG_DEVEL(LOG_LEVEL_DEBUG,
+                  "scard_function_begin_transaction_return: "
+                  "result %d", ReturnCode);
     }
 
-    /* get OutputBufferLen */
-    xstream_rd_u32_le(s, len);
-    scard_function_begin_transaction_return(irp->user_data, s, len, IoStatus);
-    devredir_irp_delete(irp);
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "leaving");
+    return call_data->callback(client, ReturnCode);
 }
 
 /**
