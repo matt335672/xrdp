@@ -1500,10 +1500,6 @@ scard_send_ListReaders(struct stream *s,
     out_uint32_le(s, cBytes);
     // [unique] [size_is(cBytes)] const byte *mszGroups; (pointer)
     out_uint32_le(s, val);
-    // We ignore the caller's settings of fmszReadersIsNULL and cchReaders
-    // for the call. The reason is we need the UTF-16 string anyway
-    // to work out how many bytes it will occupy when represented as UTF-8
-
     // long fmszReadersIsNULL;
     out_uint32_le(s, 0x000000);
     // unsigned long cchReaders;
@@ -2782,17 +2778,7 @@ scard_function_list_readers_return(struct scard_client *client,
         // Now work out what the caller actually wanted
         if (ReturnCode == XSCARD_S_SUCCESS)
         {
-            if (call_data->fmszReadersIsNULL || call_data->cchReaders == 0)
-            {
-                // Caller just wants length
-                msz_readers = NULL;
-            }
-            else if (call_data->cchReaders != SCARD_AUTOALLOCATE &&
-                     utf8len > call_data->cchReaders)
-            {
-                ReturnCode = XSCARD_E_INSUFFICIENT_BUFFER;
-            }
-            else if ((msz_readers = (char *)malloc(utf8len)) == NULL)
+            if ((msz_readers = (char *)malloc(utf8len)) == NULL)
             {
                 LOG(LOG_LEVEL_ERROR, "scard_function_list_readers_return: "
                     "Can't allocate %u bytes of memory", utf8len);

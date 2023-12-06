@@ -376,11 +376,13 @@ send_long_and_multistring_return(struct scard_client *client,
 
     s_push_layer(out_s, iso_hdr, 8);
     out_uint32_le(out_s, ReturnCode);
-    out_uint32_le(out_s, cBytes);
-    // The string can be a NULL too in the IDL (even if cBytes is > 0).
-    // This is context dependent, and the receiver needs to cater for this
-    if (msz != NULL)
+    if (msz == NULL)
     {
+        out_uint32_le(out_s, 0);
+    }
+    else
+    {
+        out_uint32_le(out_s, cBytes);
         out_uint8a(out_s, msz, cBytes);
     }
     s_mark_end(out_s);
@@ -427,7 +429,7 @@ scard_process_list_readers(struct trans *con, struct stream *in_s)
     in_uint32_le(in_s, hContext);
     in_uint32_le(in_s, cBytes);
 
-    if (!s_check_rem_and_log(in_s, cBytes + 4 + 4,
+    if (!s_check_rem_and_log(in_s, cBytes,
                              "Reading SCARD_LIST_READERS(2)"))
     {
         return send_list_readers_return(scard_client,
@@ -447,8 +449,6 @@ scard_process_list_readers(struct trans *con, struct stream *in_s)
 
     call_data->callback = send_list_readers_return;
     call_data->app_context = hContext;
-    in_uint32_le(in_s, call_data->fmszReadersIsNULL);
-    in_uint32_le(in_s, call_data->cchReaders);
     call_data->cBytes = cBytes;
     in_uint8a(in_s, call_data->mszGroups, cBytes);
 

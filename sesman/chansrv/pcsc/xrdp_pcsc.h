@@ -98,8 +98,6 @@ enum pcsc_message_code
 // 8      hContext
 // 12     cBytes
 // 16     mszGroups (UTF-8)
-// 16 + cBytes     fmszReadersIsNULL
-// 20 + cBytes     cchReaders
 //
 // Response (See [MS-RDPESC] 2.2.3.4) :-
 // Offset Value

@@ -240,7 +240,7 @@ get_message(unsigned int *code, char *data, unsigned int *bytes)
     max_bytes = *bytes;
     *bytes = GET_UINT32(header, 0);
     *code = GET_UINT32(header, 4);
-    if (*bytes > max_bytes)
+    if (*bytes > (max_bytes - 8))
     {
         pthread_mutex_unlock(&g_mutex);
         return 1;
@@ -652,7 +652,8 @@ SCardStatus(SCARDHANDLE hCard, LPSTR szReaderName, LPDWORD pcchReaderLen,
             {
                 return SCARD_E_NO_MEMORY;
             }
-            *(char **)szReaderName = reader_out;
+            *(char **)szReaderName = reader_out; // Pass pointer to user
+            szReaderName = reader_out; // Use pointer ourselves
             *pcchReaderLen = cBytes + 1;
         }
 
@@ -671,13 +672,14 @@ SCardStatus(SCARDHANDLE hCard, LPSTR szReaderName, LPDWORD pcchReaderLen,
 
         if (*pcbAtrLen == SCARD_AUTOALLOCATE)
         {
-            char *atr_out;
-            if ((atr_out = (char *)malloc(cbAtrLen)) == NULL)
+            unsigned char *atr_out;
+            if ((atr_out = (unsigned char *)malloc(cbAtrLen)) == NULL)
             {
                 free(reader_out);
                 return SCARD_E_NO_MEMORY;
             }
-            *(char **)pbAtr = atr_out;
+            *(unsigned char **)pbAtr = atr_out; // Pass pointer to user
+            pbAtr = atr_out; // Use pointer ourselves
             *pcbAtrLen = cbAtrLen;
         }
 
@@ -1064,10 +1066,8 @@ SCardListReaders(SCARDCONTEXT hContext, /* @unused */ LPCSTR mszGroups,
     unsigned int code;
     unsigned int bytes;
     unsigned int offset;
-    unsigned int fmszReadersIsNULL = (mszReaders == NULL);
     LONG ReturnCode;
     unsigned int cBytes;
-    char *readers_list_out = mszReaders;
 
     (void)mszGroups;
 
@@ -1093,12 +1093,8 @@ SCardListReaders(SCARDCONTEXT hContext, /* @unused */ LPCSTR mszGroups,
     offset += 4;
 
     // PCSC-Lite currently ignores the mszGroups parameter, so we
-    // will too. We'll send 0, reresenting a NULL string
+    // will too. We'll send 0, representing a NULL string
     SET_UINT32(msg, offset, 0);
-    offset += 4;
-    SET_UINT32(msg, offset, fmszReadersIsNULL);
-    offset += 4;
-    SET_UINT32(msg, offset, *pcchReaders);
     offset += 4;
 
     if (send_message(SCARD_LIST_READERS, msg, offset) != 0)
@@ -1107,7 +1103,7 @@ SCardListReaders(SCARDCONTEXT hContext, /* @unused */ LPCSTR mszGroups,
         return SCARD_F_INTERNAL_ERROR;
     }
 
-    bytes = sizeof(msg) - 8;
+    bytes = sizeof(msg);
     code = SCARD_LIST_READERS;
     if (get_message(&code, msg, &bytes) != 0)
     {
@@ -1126,24 +1122,22 @@ SCardListReaders(SCARDCONTEXT hContext, /* @unused */ LPCSTR mszGroups,
     cBytes = GET_UINT32(msg, offset);
     offset += 4;
 
-    // auto-allocate memory, if the user has requested it
-    if (ReturnCode == SCARD_S_SUCCESS && *pcchReaders == SCARD_AUTOALLOCATE)
+    if (ReturnCode == SCARD_S_SUCCESS)
     {
-        if ((readers_list_out = (char *)malloc(cBytes)) == NULL)
+        // auto-allocate memory, if the user has requested it
+        if (*pcchReaders == SCARD_AUTOALLOCATE)
         {
-            return SCARD_E_NO_MEMORY;
+            char *readers_list_out;
+            if ((readers_list_out = (char *)malloc(cBytes)) == NULL)
+            {
+                return SCARD_E_NO_MEMORY;
+            }
+            *(char **)mszReaders = readers_list_out; // Pass pointer to  user
+            mszReaders = readers_list_out; // Use pointer ourselves
+            *pcchReaders = cBytes;
         }
-        *(char **)mszReaders = readers_list_out;
-        *pcchReaders = cBytes;
-    }
 
-    if (ReturnCode == SCARD_E_INSUFFICIENT_BUFFER)
-    {
-        *pcchReaders = cBytes;
-    }
-    else if (ReturnCode == SCARD_S_SUCCESS)
-    {
-        if (fmszReadersIsNULL)
+        if (mszReaders == NULL)
         {
             // Do nothing - user wants length
         }
@@ -1153,7 +1147,7 @@ SCardListReaders(SCARDCONTEXT hContext, /* @unused */ LPCSTR mszGroups,
         }
         else
         {
-            memcpy(readers_list_out, msg + offset, cBytes);
+            memcpy(mszReaders, msg + offset, cBytes);
         }
         *pcchReaders = cBytes;
     }

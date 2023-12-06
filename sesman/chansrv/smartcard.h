@@ -166,8 +166,6 @@ struct list_readers_call
 
     /* See 2.2.2.4 */
     unsigned int app_context;
-    unsigned int fmszReadersIsNULL;
-    unsigned int cchReaders;
     unsigned int cBytes;
 #ifdef __cplusplus
     char mszGroups[1];
