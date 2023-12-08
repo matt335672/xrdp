@@ -29,10 +29,6 @@ int scard_pcsc_check_wait_objs(void);
 int scard_pcsc_init(void);
 int scard_pcsc_deinit(void);
 
-int scard_function_transmit_return(void *user_data,
-                                   struct stream *in_s,
-                                   int len, int status);
-
 int scard_function_control_return(void *user_data,
                                   struct stream *in_s,
                                   int len, int status);

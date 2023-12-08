@@ -16,6 +16,8 @@
 
 #include "xrdp_pcsc.h"
 
+#define MSG_HEADER_SIZE 8
+
 #define PCSC_API
 
 PCSC_API const SCARD_IO_REQUEST g_rgSCardT0Pci  = { SCARD_PROTOCOL_T0,  8 };
@@ -147,12 +149,12 @@ connect_to_chansrv(void)
 static int
 send_message(int code, char *data, int bytes)
 {
-    char header[8];
+    char header[MSG_HEADER_SIZE];
 
     pthread_mutex_lock(&g_mutex);
     SET_UINT32(header, 0, bytes);
     SET_UINT32(header, 4, code);
-    if (send(g_sck, header, 8, 0) != 8)
+    if (send(g_sck, header, MSG_HEADER_SIZE, 0) != 8)
     {
         pthread_mutex_unlock(&g_mutex);
         return 1;
@@ -172,7 +174,7 @@ send_message(int code, char *data, int bytes)
 static int
 get_message(unsigned int *code, char *data, unsigned int *bytes)
 {
-    char header[8];
+    char header[MSG_HEADER_SIZE];
     unsigned int max_bytes;
     int error;
     int recv_rv;
@@ -197,7 +199,7 @@ get_message(unsigned int *code, char *data, unsigned int *bytes)
             if (error == 1)
             {
                 /* just take a look at the next message */
-                recv_rv = recv(g_sck, header, 8, MSG_PEEK);
+                recv_rv = recv(g_sck, header, MSG_HEADER_SIZE, MSG_PEEK);
                 if (recv_rv == 8)
                 {
                     lcode = GET_UINT32(header, 4);
@@ -232,7 +234,7 @@ get_message(unsigned int *code, char *data, unsigned int *bytes)
         }
     }
 
-    if (recv(g_sck, header, 8, 0) != 8)
+    if (recv(g_sck, header, MSG_HEADER_SIZE, 0) != 8)
     {
         pthread_mutex_unlock(&g_mutex);
         return 1;
@@ -245,7 +247,7 @@ get_message(unsigned int *code, char *data, unsigned int *bytes)
         pthread_mutex_unlock(&g_mutex);
         return 1;
     }
-    if (recv(g_sck, data, *bytes, 0) != (int)*bytes)
+    if (recv(g_sck, data, *bytes, 0) != (int) * bytes)
     {
         pthread_mutex_unlock(&g_mutex);
         return 1;
@@ -918,19 +920,38 @@ SCardTransmit(SCARDHANDLE hCard, const SCARD_IO_REQUEST *pioSendPci,
               SCARD_IO_REQUEST *pioRecvPci, LPBYTE pbRecvBuffer,
               LPDWORD pcbRecvLength)
 {
+#define MAX_TRANSMIT_RETURN_SIZE (MSG_HEADER_SIZE + (4 * 6) + 66560 + 1024)
     char *msg;
+    unsigned int msg_size;
     unsigned int bytes;
     unsigned int code;
     int offset;
-    int status;
-    int extra_len;
-    int got_recv_pci;
+    LONG status;
+    unsigned int send_pci_extra_bytes;
+    unsigned int recv_pci_extra_bytes;
+
+    // Group some of the reply values together for readability
+    struct
+    {
+        unsigned int got_pio_recv_pci;
+        unsigned int dwProtocol;
+        unsigned int cbExtraBytes;
+        unsigned int cbRecvLength;
+        unsigned int cbRecvBufferLength;
+    } reply;
 
     LLOGLN(10, ("SCardTransmit:"));
     if (g_sck == -1)
     {
         LLOGLN(0, ("SCardTransmit: error, not connected"));
         return SCARD_F_INTERNAL_ERROR;
+    }
+
+    // Same checks as PCSC-Lite
+    if (pbSendBuffer == NULL || pbRecvBuffer == NULL ||
+            pcbRecvLength == NULL || pioSendPci == NULL)
+    {
+        return SCARD_E_INVALID_PARAMETER;
     }
 
     LLOGLN(10, ("  hCard 0x%8.8x", (int)hCard));
@@ -944,58 +965,95 @@ SCardTransmit(SCARDHANDLE hCard, const SCARD_IO_REQUEST *pioSendPci,
         LLOGLN(10, ("    pioRecvPci->dwProtocol %d", (int)(pioRecvPci->dwProtocol)));
         LLOGLN(10, ("    pioRecvPci->cbPciLength %d", (int)(pioRecvPci->cbPciLength)));
     }
-    msg = (char *) malloc(8192);
+
+    // Work out the SendPci extra bytes (if any)
+    if (pioSendPci->cbPciLength < sizeof(SCARD_IO_REQUEST))
+    {
+        send_pci_extra_bytes = 0;
+    }
+    else
+    {
+        send_pci_extra_bytes = pioSendPci->cbPciLength -
+                               sizeof(SCARD_IO_REQUEST);
+    }
+
+    // Work out the RecvPci extra bytes (if any)
+    if (pioRecvPci == NULL ||
+            pioRecvPci->cbPciLength < sizeof(SCARD_IO_REQUEST))
+    {
+        recv_pci_extra_bytes = 0;
+    }
+    else
+    {
+        recv_pci_extra_bytes = pioRecvPci->cbPciLength -
+                               sizeof(SCARD_IO_REQUEST);
+    }
+
+    // Size the buffer for both transmit and receive
+    msg_size = 256 + cbSendLength +
+               send_pci_extra_bytes + recv_pci_extra_bytes;
+    if (msg_size < MAX_TRANSMIT_RETURN_SIZE)
+    {
+        msg_size = MAX_TRANSMIT_RETURN_SIZE;
+    }
+    msg = (char *) malloc(msg_size);
+    if (msg == 0)
+    {
+        return SCARD_E_NO_MEMORY;
+    }
     offset = 0;
     SET_UINT32(msg, offset, hCard);
     offset += 4;
     SET_UINT32(msg, offset, pioSendPci->dwProtocol);
     offset += 4;
-    /*  SET_UINT32(msg, offset, pioSendPci->cbPciLength); */
-    SET_UINT32(msg, offset, 8);
+    SET_UINT32(msg, offset, send_pci_extra_bytes);
     offset += 4;
-    /*  extra_len = pioSendPci->cbPciLength - 8;  */
-    extra_len = 0;
-    SET_UINT32(msg, offset, extra_len);
-    offset += 4;
-    memcpy(msg + offset, pioSendPci + 1, extra_len);
-    offset += extra_len;
     SET_UINT32(msg, offset, cbSendLength);
     offset += 4;
-    memcpy(msg + offset, pbSendBuffer, cbSendLength);
-    offset += cbSendLength;
-    got_recv_pci = (pioRecvPci != NULL) && (pioRecvPci->cbPciLength >= 8);
-    // TODO figure out why recv pci does not work
-    got_recv_pci = 0;
-    if (got_recv_pci == 0)
+    if (pioRecvPci == NULL)
     {
-        SET_UINT32(msg, offset, 0); /* dwProtocol */
+        SET_UINT32(msg, offset, 0);
         offset += 4;
-        SET_UINT32(msg, offset, 0); /* cbPciLength */
+        SET_UINT32(msg, offset, 0);
         offset += 4;
-        SET_UINT32(msg, offset, 0); /* extra_len */
+        SET_UINT32(msg, offset, 0);
         offset += 4;
     }
     else
     {
+        SET_UINT32(msg, offset, 1);
+        offset += 4;
         SET_UINT32(msg, offset, pioRecvPci->dwProtocol);
         offset += 4;
-        SET_UINT32(msg, offset, pioRecvPci->cbPciLength);
+        SET_UINT32(msg, offset, recv_pci_extra_bytes);
         offset += 4;
-        extra_len = pioRecvPci->cbPciLength - 8;
-        SET_UINT32(msg, offset, extra_len);
-        offset += 4;
-        memcpy(msg + offset, pioRecvPci + 1, extra_len);
-        offset += extra_len;
     }
+    SET_UINT32(msg, offset, 0); // fpbRecvBufferIsNULL
+    offset += 4;
     SET_UINT32(msg, offset, *pcbRecvLength);
     offset += 4;
+    if (send_pci_extra_bytes > 0)
+    {
+        const char *p = (const char *)(pioSendPci + 1);
+        memcpy(msg + offset, p, send_pci_extra_bytes);
+        offset += send_pci_extra_bytes;
+    }
+    memcpy(msg + offset, pbSendBuffer, cbSendLength);
+    offset += cbSendLength;
+    if (pioRecvPci != NULL && recv_pci_extra_bytes > 0)
+    {
+        const char *p = (const char *)(pioRecvPci + 1);
+        memcpy(msg + offset, p, recv_pci_extra_bytes);
+        offset += recv_pci_extra_bytes;
+    }
+
     if (send_message(SCARD_TRANSMIT, msg, offset) != 0)
     {
         LLOGLN(0, ("SCardTransmit: error, send_message"));
         free(msg);
         return SCARD_F_INTERNAL_ERROR;
     }
-    bytes = 8192;
+    bytes = msg_size;
     code = SCARD_TRANSMIT;
     if (get_message(&code, msg, &bytes) != 0)
     {
@@ -1003,39 +1061,61 @@ SCardTransmit(SCARDHANDLE hCard, const SCARD_IO_REQUEST *pioSendPci,
         free(msg);
         return SCARD_F_INTERNAL_ERROR;
     }
-    if (code != SCARD_TRANSMIT)
+    if (code != SCARD_TRANSMIT || bytes < 24)
     {
         LLOGLN(0, ("SCardTransmit: error, bad code"));
         free(msg);
         return SCARD_F_INTERNAL_ERROR;
     }
     offset = 0;
-    if (got_recv_pci == 0)
+    status = GET_UINT32(msg, offset);
+    offset += 4;
+    reply.got_pio_recv_pci = GET_UINT32(msg, offset);
+    offset += 4;
+    reply.dwProtocol = GET_UINT32(msg, offset);
+    offset += 4;
+    reply.cbExtraBytes = GET_UINT32(msg, offset);
+    offset += 4;
+    reply.cbRecvLength = GET_UINT32(msg, offset);
+    offset += 4;
+    reply.cbRecvBufferLength = GET_UINT32(msg, offset);
+    offset += 4;
+
+    // All the remaining data we need available?
+    if (offset + reply.cbRecvBufferLength + reply.cbExtraBytes > bytes)
     {
-        offset += 8;
-        extra_len = GET_UINT32(msg, offset);
-        offset += 4;
-        offset += extra_len;
+        return SCARD_F_INTERNAL_ERROR;
+    }
+
+    // Sort out reply data
+    if (reply.cbRecvLength > *pcbRecvLength)
+    {
+        // Other end should have checked this
+        status = SCARD_E_INSUFFICIENT_BUFFER;
     }
     else
     {
-        pioRecvPci->dwProtocol = GET_UINT32(msg, offset);
-        offset += 4;
-        pioRecvPci->cbPciLength = GET_UINT32(msg, offset);
-        offset += 4;
-        extra_len = GET_UINT32(msg, offset);
-        offset += 4;
-        offset += extra_len;
+        memcpy(pbRecvBuffer, msg + offset, reply.cbRecvBufferLength);
     }
-    *pcbRecvLength = GET_UINT32(msg, offset);
-    offset += 4;
-    LLOGLN(10, ("  cbRecvLength %d", (int)*pcbRecvLength));
-    memcpy(pbRecvBuffer, msg + offset, *pcbRecvLength);
-    LHEXDUMP(10, (pbRecvBuffer, *pcbRecvLength));
-    offset += *pcbRecvLength;
-    status = GET_UINT32(msg, offset);
+    *pcbRecvLength = reply.cbRecvLength;
+    offset += reply.cbRecvBufferLength;
+
+    if (pioRecvPci != NULL)
+    {
+        if (!reply.got_pio_recv_pci)
+        {
+            return SCARD_F_INTERNAL_ERROR;
+        }
+        pioRecvPci->dwProtocol = reply.dwProtocol;
+        pioRecvPci->cbPciLength = reply.cbExtraBytes + sizeof(SCARD_IO_REQUEST);;
+        if (recv_pci_extra_bytes >= reply.cbExtraBytes)
+        {
+            memcpy((char *)pioRecvPci + 1, msg + offset, reply.cbExtraBytes);
+        }
+    }
     free(msg);
     return status;
+#undef MAX_TRANSMIT_RETURN_SIZE
 }
 
 /*****************************************************************************/

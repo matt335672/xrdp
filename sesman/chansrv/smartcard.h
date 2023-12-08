@@ -26,13 +26,25 @@
 #ifndef _SMARTCARD_H
 #define _SMARTCARD_H
 
-struct xrdp_scard_io_request
+/**
+ * Structure used as part of a transmit_call
+ *
+ * See [MS-RDPESC] 2.2.1.8
+ */
+struct scard_io_request
 {
-    tui32 dwProtocol;
-    tui32 cbPciLength;
-    int extra_bytes;
-    char *extra_data;
+    unsigned int dwProtocol;
+    unsigned int cbExtraBytes;
+#ifdef __cplusplus
+    char pbExtraBytes[1];
+#else
+    char pbExtraBytes[];
+#endif
 };
+
+#define MALLOC_SCARD_IO_REQUEST(extra_bytes) \
+    (struct scard_io_request *) \
+    malloc(offsetof(struct scard_io_request, pbExtraBytes) + (extra_bytes))
 
 typedef struct reader_state
 {
@@ -247,6 +259,43 @@ struct hcard_and_disposition_call
     unsigned int dwDisposition; // Ignored on BeginTransaction
 };
 
+
+/**
+ * Use this struct to make a transmit call
+ *
+ * Fill in all fields (apart from p) and pass to
+ * scard_send_transmit(). The result will be received via the
+ * callback, provided the client is still active.
+ *
+ * @pre The structure must be allocated on the heap.
+ * @pre ioSendPci must be specified and separately allocatd on the heap
+ * @pre if pioRecvPci is used it must be allocated on the heap
+ */
+struct transmit_call
+{
+    struct common_call_private p;
+
+    /** How to pass the result back to the client (2.2.3.11) */
+    int (*callback)(struct scard_client *client,
+                    unsigned int ReturnCode,
+                    const struct scard_io_request *pioRecvPci,
+                    unsigned int cbRecvLength,
+                    const char *pbRecvBuffer);
+
+    /* See 2.2.2.16 */
+    unsigned int app_hcard;
+    struct scard_io_request *pioSendPci;
+    unsigned int cbSendLength;
+    struct scard_io_request *pioRecvPci;
+    int retrieve_length_only;
+    unsigned int cbRecvLength;
+#ifdef __cplusplus
+    char pbSendBuffer[1];
+#else
+    char pbSendBuffer[];
+#endif
+};
+
 void scard_device_announce(tui32 device_id);
 int  scard_get_wait_objs(tbus *objs, int *count, int *timeout);
 int  scard_check_wait_objs(void);
@@ -409,12 +458,19 @@ void
 scard_send_disconnect(struct scard_client *client,
                       struct hcard_and_disposition_call *call_data);
 
-int  scard_send_transmit(void *user_data,
-                         char *context, int context_bytes,
-                         char *card, int card_bytes,
-                         char *send_data, int send_bytes, int recv_bytes,
-                         struct xrdp_scard_io_request *send_ior,
-                         struct xrdp_scard_io_request *recv_ior);
+
+/**
+ * Sends a transmit call to the RDP service
+ *
+ * @param client client
+ * @param call_data Info about the call
+ *
+ * The call_data (and some call_data members) must be on the heap. After
+ * this call, ownership of the call_data is taken away from the caller.
+ */
+void
+scard_send_transmit(struct scard_client *client,
+                    struct transmit_call *call_data);
 
 int  scard_send_control(void *user_data,
                         char *context, int context_bytes,

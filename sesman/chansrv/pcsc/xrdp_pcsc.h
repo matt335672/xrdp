@@ -184,5 +184,37 @@ enum pcsc_message_code
 // 0      Header, code SCARD_END_TRANSACTION
 // 8      ReturnCode
 //
+// *****************************************************************************
+//  T R A N S M I T
+// *****************************************************************************
+// Request (See [MS-RDPESC] 2.2.2.19) :-
+// Offset Value
+// 0      Header, code SCARD_TRANSMIT
+// 8      hCard
+// 12     ioSendPci.dwProtocol
+// 16     ioSendPci.cbExtraBytes
+// 20     cbSendLength
+// 24     Use pioRecvPci (==0 : ignore next two fields and later data)
+// 28     ioRecvPci.dwProtocol
+// 32     ioRecvPci.cbExtraBytes
+// 36     fpbRecvBufferIsNULL
+// 40     cbRecvLength
+// 44     ioSendPci.pbExtraBytes
+// ??     pbSendBuffer
+// ??     ioRecvPci.pbExtraBytes
+//
+// Response (See [MS-RDPESC] 2.2.3.11) :-
+// Offset Value
+// 0      Header, code SCARD_TRANSMIT
+// 8      ReturnCode
+// 12     Use pioRecvPci (==0 : ignore next two fields (and later data))
+// 16     pioRecvPci.dwProtocol
+// 32     pioRecvPci.cbExtraBytes
+// 36     cbRecvLength. Length needed for data.
+// 40     cbRecvBufferLength. Either 0 (no pbRecvBuffer), or cbRecvLength
+// 44     *pbRecvBuffer
+// ??     pioRecvPci.pbExtraBytes
+
+//
 
 #endif // XRDP_PCSC_H

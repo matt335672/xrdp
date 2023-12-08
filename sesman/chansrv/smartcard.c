@@ -38,6 +38,8 @@
 #include <config_ac.h>
 #endif
 
+#include <stddef.h>
+
 #include <string.h>
 #include "os_calls.h"
 #include "string_calls.h"
@@ -119,6 +121,10 @@
 
 #define MAX_SMARTCARDS                       16
 
+/* Constants releated to referent IDs in NDR */
+#define REFERENT_ID_BASE 0x20000
+#define REFERENT_ID_INC 4
+
 /* stores info about a smart card */
 typedef struct smartcard
 {
@@ -179,13 +185,9 @@ scard_send_HCardAndDisposition(struct stream *s,
 static void
 scard_send_Status(struct stream *s, struct status_call *call_data,
                   const struct redir_scardhandle *hCard);
-static int  scard_send_Transmit(IRP *irp,
-                                char *context, int context_byte,
-                                char *card, int card_bytes,
-                                char *send_data, int send_bytes,
-                                int recv_bytes,
-                                struct xrdp_scard_io_request *send_ior,
-                                struct xrdp_scard_io_request *recv_ior);
+static int
+scard_send_Transmit(struct stream *s, struct transmit_call *call_data,
+                    const struct redir_scardhandle *hCard);
 static int scard_send_Control(IRP *irp, char *context, int context_bytes,
                               char *card, int card_bytes,
                               char *send_data, int send_bytes,
@@ -250,10 +252,10 @@ scard_function_disconnect_return(struct scard_client *client,
                                  void *vcall_data, struct stream *in_s,
                                  unsigned int len, unsigned int status);
 
-static void scard_handle_Transmit_Return(struct stream *s, IRP *irp,
-        tui32 DeviceId,
-        tui32 CompletionId,
-        tui32 IoStatus);
+static int
+scard_function_transmit_return(struct scard_client *client,
+                               void *vcall_data, struct stream *in_s,
+                               unsigned int len, unsigned int status);
 
 static void scard_handle_Control_Return(struct stream *s, IRP *irp,
                                         tui32 DeviceId,
@@ -964,37 +966,95 @@ scard_send_disconnect(struct scard_client *client,
 }
 
 /**
- * The Transmit_Call structure is used to send data to the smart card
- * associated with a valid context.
+ * Local function to free a transmit_call struct
+ *
  *****************************************************************************/
-int
-scard_send_transmit(void *call_data, char *context, int context_bytes,
-                    char *card, int card_bytes,
-                    char *send_data, int send_bytes, int recv_bytes,
-                    struct xrdp_scard_io_request *send_ior,
-                    struct xrdp_scard_io_request *recv_ior)
+static void
+free_transmit_call(struct transmit_call *call_data)
+{
+    free(call_data->pioSendPci);
+    free(call_data->pioRecvPci);
+    free(call_data);
+}
+
+/**
+ * Local function to use as an IRP destructor if the IRP is carrying a
+ * struct transmit_call
+ *
+ *****************************************************************************/
+static void
+irp_free_transmit_call_user_data(IRP *irp)
+{
+    struct transmit_call *call_data = (struct transmit_call *)irp->user_data;
+    free_transmit_call(call_data);
+}
+
+/**
+ *
+ *****************************************************************************/
+void
+scard_send_transmit(struct scard_client *client,
+                    struct transmit_call *call_data)
 {
     IRP *irp;
+    struct stream *s;
+    struct redir_scardhandle hCard;
 
+    /* Set up common_call_private data for the return */
+    call_data->p.client_id = scdata_get_client_id(client);
+    call_data->p.unmarshall_callback = scard_function_transmit_return;
+
+    /* pioSendPci specified? */
+    if (call_data->pioSendPci == NULL)
+    {
+        call_data->callback(client, XSCARD_E_INVALID_PARAMETER, NULL, 0, NULL);
+        free_transmit_call(call_data);
+    }
+    /* Get the RDP-level context */
+    else if (!scdata_lookup_card_mapping(client,
+                                         call_data->app_hcard, &hCard))
+    {
+        call_data->callback(client, XSCARD_E_INVALID_HANDLE, NULL, 0, NULL);
+        free_transmit_call(call_data);
+    }
     /* setup up IRP */
-    if ((irp = devredir_irp_new()) == NULL)
+    else if ((irp = devredir_irp_new()) == NULL)
     {
         LOG_DEVEL(LOG_LEVEL_ERROR, "system out of memory");
-        return 1;
+        call_data->callback(client, XSCARD_E_NO_MEMORY, NULL, 0, NULL);
+        free_transmit_call(call_data);
     }
+    else
+    {
+        unsigned int ioctl_length = 256;
+        ioctl_length += call_data->cbSendLength;
+        ioctl_length += call_data->pioSendPci->cbExtraBytes;
+        if (call_data->pioRecvPci != NULL)
+        {
+            ioctl_length += call_data->pioRecvPci->cbExtraBytes;
+        }
+        irp->scard_index = g_scard_index;
+        irp->CompletionId = g_completion_id++;
+        irp->DeviceId = g_device_id;
+        irp->callback = scard_handle_irp_completion;
+        /* Pass ownership of the call_data to the IRP */
+        irp->user_data = call_data;
+        irp->extra_destructor = irp_free_transmit_call_user_data;
 
-    irp->scard_index = g_scard_index;
-    irp->CompletionId = g_completion_id++;
-    irp->DeviceId = g_device_id;
-    irp->callback = scard_handle_Transmit_Return;
-    irp->user_data = call_data;
-
-    /* send IRP to client */
-    scard_send_Transmit(irp, context, context_bytes, card, card_bytes,
-                        send_data, send_bytes,
-                        recv_bytes, send_ior, recv_ior);
-
-    return 0;
+        s = scard_make_new_ioctl(irp, SCARD_IOCTL_TRANSMIT, ioctl_length);
+        if (s == NULL)
+        {
+            LOG_DEVEL(LOG_LEVEL_ERROR, "scard_make_new_ioctl failed");
+            call_data->callback(client, XSCARD_E_NO_MEMORY, NULL, 0, NULL);
+            devredir_irp_delete(irp);
+        }
+        else
+        {
+            /* send IRP to client */
+            scard_send_Transmit(s, call_data, &hCard);
+            free_stream(s);
+        }
+    }
 }
 
 /**
@@ -1268,7 +1328,8 @@ in_align_s(struct stream *s, unsigned int boundary)
  * Outputs first part of a DEVREDIR_SCARDCONTEXT
  * @param s Stream
  * @param Context Context
- * @param referent_id Referent identifier for the array
+ * @param[in,out] referent_id Next referent ID to use by reference. This is
+ *                    incremented if a referent ID is actually used.
  *
  * This call will be followed by a call to
  * out_redir_scardcontext_part2(). The positioning of the call
@@ -1277,11 +1338,12 @@ in_align_s(struct stream *s, unsigned int boundary)
 static void
 out_redir_scardcontext_part1(struct stream *s,
                              const struct redir_scardcontext *Context,
-                             unsigned int referent_id)
+                             unsigned int *referent_id)
 {
     out_align_s(s, 4);
     out_uint32_le(s, Context->cbContext);
-    out_uint32_le(s, referent_id);
+    out_uint32_le(s, *referent_id);
+    *referent_id += REFERENT_ID_INC;
 }
 
 /*****************************************************************************/
@@ -1304,9 +1366,9 @@ out_redir_scardcontext_part2(struct stream *s,
 /**
  * Outputs first part of a DEVREDIR_SCARDHANDLE
  * @param s Stream
- * @param hCard CArd Handle
- * @param referent_id1 Referent identifier for the context array
- * @param referent_id2 Referent identifier for the card array
+ * @param hCard Card Handle
+ * @param[in,out] referent_id Next referent ID to use by reference. This is
+ *                    incremented if a referent ID is actually used.
  *
  * This call will be followed by a call to
  * out_redir_scardhandle_part2(). The positioning of the call
@@ -1315,20 +1377,20 @@ out_redir_scardcontext_part2(struct stream *s,
 static void
 out_redir_scardhandle_part1(struct stream *s,
                             const struct redir_scardhandle *hCard,
-                            unsigned int referent_id1,
-                            unsigned int referent_id2)
+                            unsigned int *referent_id)
 {
-    out_redir_scardcontext_part1(s, &hCard->Context, referent_id1);
+    out_redir_scardcontext_part1(s, &hCard->Context, referent_id);
     // Will already be aligned on a 4-boundary
     out_uint32_le(s, hCard->cbHandle);
-    out_uint32_le(s, referent_id2);
+    out_uint32_le(s, *referent_id);
+    *referent_id += REFERENT_ID_INC;
 }
 
 /*****************************************************************************/
 /**
- * Outputs second part of a DEVREDIR_SCARDCONTEXT
+ * Outputs second part of a DEVREDIR_SCARDHANDLE
  * @param s Stream
- * @param Context Context
+ * @param hCard Card handle
  */
 static void
 out_redir_scardhandle_part2(struct stream *s,
@@ -1338,6 +1400,55 @@ out_redir_scardhandle_part2(struct stream *s,
     out_align_s(s, 4);
     out_uint32_le(s, hCard->cbHandle);
     out_uint8a(s, hCard->pbHandle, hCard->cbHandle);
+}
+
+/*****************************************************************************/
+/**
+ * Outputs first part of an scard_io_request
+ * @param s Stream
+ * @param ioreq I/O request
+ * @param[in,out] referent_id Next referent ID to use by reference. This is
+ *                    incremented if a referent ID is actually used.
+ *
+ * This call will be followed by a call to
+ * out_scard_io_request_part2(). The positioning of the call
+ * depends on NDR rules.
+ */
+static void
+out_scard_io_request_part1(struct stream *s,
+                           const struct scard_io_request *ioreq,
+                           unsigned int *referent_id)
+{
+    out_align_s(s, 4);
+    out_uint32_le(s, ioreq->dwProtocol);
+    out_uint32_le(s, ioreq->cbExtraBytes);
+    if (ioreq->cbExtraBytes > 0)
+    {
+        out_uint32_le(s, *referent_id);
+        *referent_id += REFERENT_ID_INC;
+    }
+    else
+    {
+        out_uint32_le(s, 0);
+    }
+}
+
+/*****************************************************************************/
+/**
+ * Outputs second part of an scard_io_request
+ * @param s Stream
+ * @param ioreq I/O request
+ */
+static void
+out_scard_io_request_part2(struct stream *s,
+                           const struct scard_io_request *ioreq)
+{
+    if (ioreq->cbExtraBytes > 0)
+    {
+        out_align_s(s, 4);
+        out_uint32_le(s, ioreq->cbExtraBytes);
+        out_uint8a(s, ioreq->pbExtraBytes, ioreq->cbExtraBytes);
+    }
 }
 
 /*****************************************************************************/
@@ -1409,11 +1520,12 @@ scard_send_ReleaseContext(struct stream *s,
 {
     /* see [MS-RDPESC] 3.1.4.2 */
 
+    unsigned int ref_id = REFERENT_ID_BASE; /* Next referent ID to use */
     int            bytes;
 
     s_push_layer(s, mcs_hdr, 4); /* bytes, set later */
     out_uint32_le(s, 0x00000000);
-    out_redir_scardcontext_part1(s, Context, 0x00200000);
+    out_redir_scardcontext_part1(s, Context, &ref_id);
     out_redir_scardcontext_part2(s, Context);
 
     s_mark_end(s);
@@ -1542,6 +1654,7 @@ scard_send_ListReaders(struct stream *s,
      *
      */
 
+    unsigned int ref_id = REFERENT_ID_BASE; /* Next referent ID to use */
     int            bytes;
     int            val = 0;    // Referent Id for mszGroups (assume NULL)
     const char *mszGroups = call_data->mszGroups;
@@ -1559,7 +1672,7 @@ scard_send_ListReaders(struct stream *s,
     out_uint32_le(s, 0x00000000);
 
     // REDIR_SCARDCONTEXT Context;
-    out_redir_scardcontext_part1(s, Context, 0x00200000);
+    out_redir_scardcontext_part1(s, Context, &ref_id);
     // [range(0, 65536)] unsigned long cBytes;
     out_uint32_le(s, cBytes);
     // [unique] [size_is(cBytes)] const byte *mszGroups; (pointer)
@@ -1823,6 +1936,7 @@ scard_send_Connect(struct stream *s, struct connect_call *call_data,
      * ??       Conformant Array pointed to by pbContext
      *
      */
+    unsigned int ref_id = REFERENT_ID_BASE; /* Next referent ID to use */
     int            bytes;
 
     s_push_layer(s, mcs_hdr, 4); /* bytes, set later */
@@ -1831,7 +1945,7 @@ scard_send_Connect(struct stream *s, struct connect_call *call_data,
     out_uint32_le(s, 0x00020000);
 
     // REDIR_SCARDCONTEXT Context;
-    out_redir_scardcontext_part1(s, context, 0x00200000);
+    out_redir_scardcontext_part1(s, context, &ref_id);
     // unsigned long dwShareMode;
     out_uint32_le(s, call_data->dwShareMode);
     // unsigned long dwPreferredProtocols;
@@ -1947,14 +2061,15 @@ scard_send_HCardAndDisposition(struct stream *s,
                                struct hcard_and_disposition_call *call_data,
                                const struct redir_scardhandle *hCard)
 {
-    int bytes;
     /* see [MS-RDPESC] 2.2.2.16 */
+    int bytes;
+    unsigned int ref_id = REFERENT_ID_BASE; /* Next referent ID to use */
 
     /* Private Header ([MS-RPCE] 2.2.6.2 */
     s_push_layer(s, mcs_hdr, 4); /* bytes, set later */
     out_uint32_le(s, 0x00000000);
 
-    out_redir_scardhandle_part1(s, hCard, 0x20000, 0x20004);
+    out_redir_scardhandle_part1(s, hCard, &ref_id);
 
     // unsigned long dwDisposition;
     out_uint32_le(s, call_data->dwDisposition);
@@ -2033,18 +2148,18 @@ scard_send_Status(struct stream *s, struct status_call *call_data,
      * 16       fmszReaderNamesIsNULL
      * 20       cchReaderLen
      * 24       cbAtrLen
-     * if (hCard.Context.pbContext Referent Identifier != NULL)
-     * | 28       length of context in bytes
-     * | 32       Context data (up to 16 bytes)
+     * 28       length of context in bytes
+     * 32       Context data (up to 16 bytes)
      * ??       length of handle in bytes
      * ??       Handle data (up to 16 bytes)
      */
     int bytes;
+    unsigned int ref_id = REFERENT_ID_BASE; /* Next referent ID to use */
 
     s_push_layer(s, mcs_hdr, 4); /* bytes, set later */
     out_uint32_le(s, 0x00000000);
 
-    out_redir_scardhandle_part1(s, hCard, 0x20000, 0x20004);
+    out_redir_scardhandle_part1(s, hCard, &ref_id);
 
     // Always ask for all the data
     // long fmszReaderNamesIsNULL;
@@ -2084,169 +2199,144 @@ scard_send_Status(struct stream *s, struct status_call *call_data,
  * associated with a valid context.
  *****************************************************************************/
 static int
-scard_send_Transmit(IRP *irp, char *context, int context_bytes,
-                    char *card, int card_bytes, char *send_data,
-                    int send_bytes, int recv_bytes,
-                    struct xrdp_scard_io_request *send_ior,
-                    struct xrdp_scard_io_request *recv_ior)
+scard_send_Transmit(struct stream *s, struct transmit_call *call_data,
+                    const struct redir_scardhandle *hCard)
 {
-    /* see [MS-RDPESC] 2.2.2.19 */
-
-    SMARTCARD     *sc;
-    struct stream *s;
-    int            bytes;
-    int            val;
-
-    if ((sc = smartcards[irp->scard_index]) == NULL)
-    {
-        LOG_DEVEL(LOG_LEVEL_ERROR, "smartcards[%d] is NULL", irp->scard_index);
-        return 1;
-    }
-
-    if ((s = scard_make_new_ioctl(irp, SCARD_IOCTL_TRANSMIT, 4096)) == NULL)
-    {
-        LOG_DEVEL(LOG_LEVEL_ERROR, "scard_make_new_ioctl");
-        return 1;
-    }
-
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "send_bytes %d recv_bytes %d send dwProtocol %d cbPciLength %d "
-              "extra_bytes %d recv dwProtocol %d cbPciLength %d extra_bytes %d",
-              send_bytes, recv_bytes, send_ior->dwProtocol, send_ior->cbPciLength,
-              send_ior->extra_bytes, recv_ior->dwProtocol, recv_ior->cbPciLength,
-              recv_ior->extra_bytes);
-
-    /*
-     * command format
+    /* see [MS-RDPESC] 2.2.2.19
      *
-     * ......
-     *       20 bytes    padding
-     * u32    4 bytes    len 8, LE, v1
-     * u32    4 bytes    filler
-     *       12 bytes    unused (s->p currently pointed here at unused[0])
-     * u32    4 bytes    map0
-     *        4 bytes    unused
-     * u32    4 bytes    map1
-     * u32    4 bytes    dwProtocol
-     * u32    4 bytes    cbPciLength
-     * u32    4 bytes    map2
-     * u32    4 bytes    cbSendLength
-     * u32    4 bytes    map3
-     * u32    4 bytes    map4
-     * u32    4 bytes    map5
-     * u32    4 bytes    map6
-     * u32    4 bytes    cbRecvLength
-     * u32    4 bytes    len of sc_handle
-     * u32    4 bytes    sc_handle
+     * IDL:-
+     *
+     * typedef struct _REDIR_SCARDCONTEXT {
+     *    [range(0,16)] unsigned long cbContext;
+     *    [unique] [size_is(cbContext)] byte *pbContext;
+     *    } REDIR_SCARDCONTEXT;
+     *
+     * typedef struct _REDIR_SCARDHANDLE {
+     *    REDIR_SCARDCONTEXT Context;
+     *    [range(0,16)] unsigned long cbHandle;
+     *    [size_is(cbHandle)] byte *pbHandle;
+     *    } REDIR_SCARDHANDLE;
+     *
+     * typedef struct _SCardIO_Request {
+     *    unsigned long dwProtocol;
+     *    [range(0,1024)] unsigned long cbExtraBytes;
+     *    [unique] [size_is(cbExtraBytes)] byte *pbExtraBytes;
+     *    } SCardIO_Request;
+     *
+     * typedef struct _Transmit_Call {
+     *    REDIR_SCARDHANDLE hCard;
+     *    SCardIO_Request ioSendPci;
+     *    [range(0,66560)] unsigned long cbSendLength;
+     *    [size_is(cbSendLength)] const byte* pbSendBuffer;
+     *    [unique] SCardIO_Request* pioRecvPci;
+     *    long fpbRecvBufferIsNULL;
+     *    unsigned long cbRecvLength;
+     *    } Transmit_Call;
+     *
+     * Type summary:-
+     * hCard.Context.cbContext  Unsigned 32-bit word
+     * hCard.Context.pbContext  Embedded full ptr to conformant array of bytes
+     * hCard.cbHandle           Unsigned 32-bit word
+     * hCard.pbHandle           Embedded full ptr to conformant array of bytes
+     * ioSendPci.dwProtocol     32-bit word
+     * ioSendPci.cbExtraBytes   32-bit word
+     * ioSendPci.pbExtraBytes   Embedded full ptr to conformant array of bytes
+     * cbSendLength             32-bit word
+     * pbSendBuffer             Embedded full ptr to conformant array of bytes
+     * pioRecvPci               Embedded full ptr to struct
+     * fpbRecvBufferIsNULL      32-bit word
+     * cbRecvLength             32-bit word
+     *
+     * NDR:-
+     *
+     * Offset   Decription
+     * 0        hCard.Context.cbContext
+     * 4        hCard.Context.pbContext Referent Identifier
+     * 8        hCard.cbHandle
+     * 12       hCard.pbHandle Referent Identifier
+     * 16       ioSendPci.dwProtocol
+     * 20       ioSendPci.cbExtraBytes
+     * 24       ioSendPci.pbExtraBytes Referent Identifier
+     * 28       cbSendLength
+     * 32       pbSendBuffer referent identifier
+     * 36       pioRecvPci referent identifier
+     * 40       fpbRecvBufferIsNULL
+     * 44       cbRecvLength
+     * 48       length of context in bytes (hCard.Context.cbContext copy)
+     * 52       Context data (up to 16 bytes)
+     * ??       length of handle in bytes (hCard.cbHandle copy)
+     * ??       Handle data (up to 16 bytes)
+     * if (ioSendPci.pbExtraBytes != NULL)
+     * | ??       Copy of ioSendPci.cbExtraBytes
+     * | ??       ioSendPci.pbExtraBytes data
+     * ??       Copy of cbSendLength
+     * ??       pbSendBuffer data
+     * if (pioRecvPci != NULL)
+     * | ??     pioRecvPci.dwProtocol
+     * | ??     pioRecvPci.cbExtraBytes
+     * | ??     pioRecvPci.pbExtraBytes Referent identifier
+     * if (pioRecvPci.pbExtraBytes != NULL)
+     * | ??       Copy of pioRecvPci.cbExtraBytes
+     * | ??       pioRecvPci.pbExtraBytes data
      */
 
-    //g_writeln("send_bytes %d", send_bytes);
-    //g_writeln("recv_bytes %d", recv_bytes);
-
-#if 0
-    s_push_layer(s, mcs_hdr, 4); /* bytes, set later */
-    out_uint32_be(s, 0x00000000);
-    out_uint32_be(s, 0x04000000);
-    out_uint32_be(s, 0x00000200); // map 0
-    out_uint32_be(s, 0x04000000);
-    out_uint32_be(s, 0x04000200); // map 1
-    out_uint32_be(s, 0x01000000);
-    out_uint32_be(s, 0x00000000);
-    out_uint32_be(s, 0x00000000);
-
-    //out_uint32_be(s, 0x05000000);
-    out_uint32_le(s, send_bytes);
-
-    out_uint32_be(s, 0x08000200);
-    out_uint32_be(s, 0x0c000200);
-    out_uint32_be(s, 0x00000000);
-
-    //out_uint32_be(s, 0x02010000);
-    out_uint32_le(s, recv_bytes);
-
-    out_uint32_be(s, 0x04000000);
-    out_uint32_be(s, 0x05000000);
-    out_uint32_be(s, 0x04000000);
-    out_uint32_be(s, 0x0b000000);
-
-    //out_uint32_be(s, 0x05000000);
-    //out_uint32_be(s, 0x00b00704);
-    //out_uint32_be(s, 0x10000000);
-    out_uint32_le(s, send_bytes);
-    out_uint8p(s, send_data, send_bytes);
-    align_s(s, 4);
-
-    out_uint32_be(s, 0x01000000);
-    out_uint32_be(s, 0x00000000);
-    out_uint32_be(s, 0x00000000);
-#else
-
-    //g_printf("send cbPciLength %d\n", send_ior->cbPciLength);
-    //g_printf("send extra_bytes %d\n", send_ior->extra_bytes);
-    //g_printf("recv cbPciLength %d\n", recv_ior->cbPciLength);
-    //g_printf("recv extra_bytes %d\n", recv_ior->extra_bytes);
+    int            bytes;
+    unsigned int ref_id = REFERENT_ID_BASE; /* Next referent ID to use */
 
     s_push_layer(s, mcs_hdr, 4); /* bytes, set later */
     out_uint32_le(s, 0x00000000);
 
-    out_uint32_le(s, context_bytes);
-    out_uint32_le(s, 0x00020000); /* map0 */
+    // REDIR_SCARDHANDLE hCard;
+    out_redir_scardhandle_part1(s, hCard, &ref_id);
+    // SCardIO_Request ioSendPci;
+    out_scard_io_request_part1(s, call_data->pioSendPci, &ref_id);
 
-    out_uint32_le(s, card_bytes);
-    out_uint32_le(s, 0x00020004); /* map1 */
-
-    out_uint32_le(s, send_ior->dwProtocol);
-    out_uint32_le(s, send_ior->cbPciLength - 8);
-
-    val = send_ior->extra_bytes > 0 ? 1 : 0;
-    out_uint32_le(s, val); /* map2 */
-
-    out_uint32_le(s, send_bytes);
-
-    val = send_bytes > 0 ? 0x00020008 : 0;
-    out_uint32_le(s, val); /* map3 */
-
-    val = recv_ior->cbPciLength > 0 ? 0x0002000c : 0;
-    out_uint32_le(s, val); /* map 4 */
-
-    out_uint32_le(s, 0); // map5
-    out_uint32_le(s, recv_bytes);
-
-    /* map0 */
-    out_uint32_le(s, context_bytes);
-    out_uint8a(s, context, context_bytes);
-
-    /* map1 */
-    out_uint32_le(s, card_bytes);
-    out_uint8a(s, card, card_bytes);
-
-    if (send_ior->extra_bytes > 0)
+    // [range(0,66560)] unsigned long cbSendLength;
+    out_uint32_le(s, call_data->cbSendLength);
+    // [size_is(cbSendLength)] const byte* pbSendBuffer;
+    // This could be empty - check for that.
+    if (call_data->cbSendLength > 0)
     {
-        out_uint32_le(s, send_ior->extra_bytes);
-        out_uint8a(s, send_ior->extra_data, send_ior->extra_bytes);
+        out_uint32_le(s, ref_id);
+        ref_id += REFERENT_ID_INC;
+    }
+    else
+    {
+        out_uint32_le(s, 0);
+    }
+    // [unique] SCardIO_Request* pioRecvPci;
+    if (call_data->pioRecvPci != NULL)
+    {
+        out_uint32_le(s, ref_id);
+        ref_id += REFERENT_ID_INC;
+    }
+    else
+    {
+        out_uint32_le(s, 0);
+    }
+    // long fpbRecvBufferIsNULL;
+    out_uint32_le(s, call_data->retrieve_length_only);
+    // unsigned long cbRecvLength;
+    out_uint32_le(s, call_data->cbRecvLength);
+
+    // Now output all the pointed-to data
+    out_redir_scardhandle_part2(s, hCard);
+    out_scard_io_request_part2(s, call_data->pioSendPci);
+
+    out_align_s(s, 4);
+    if (call_data->cbSendLength > 0)
+    {
+        out_uint32_le(s, call_data->cbSendLength);
+        out_uint8a(s, call_data->pbSendBuffer, call_data->cbSendLength);
     }
 
-    if (send_bytes > 0)
+    if (call_data->pioRecvPci != NULL)
     {
-        out_uint32_le(s, send_bytes);
-        out_uint8a(s, send_data, send_bytes);
-        out_align_s(s, 4);
+        out_scard_io_request_part1(s, call_data->pioRecvPci, &ref_id);
+        out_scard_io_request_part2(s, call_data->pioRecvPci);
     }
 
-    if (recv_ior->cbPciLength > 0)
-    {
-        /* map4 */
-        out_uint32_le(s, recv_ior->dwProtocol);
-        out_uint32_le(s, recv_ior->cbPciLength - 8);
-        val = recv_ior->extra_bytes > 0 ? 1 : 0;
-        out_uint32_le(s, val); /* map6*/
-        if (val)
-        {
-            out_uint32_le(s, recv_ior->extra_bytes);
-            out_uint8a(s, recv_ior->extra_data, recv_ior->extra_bytes);
-        }
-    }
-#endif
-
+    out_align_s(s, 8); // [MS-RPCE] 2.2.6.2 */
     s_mark_end(s);
 
     s_pop_layer(s, mcs_hdr);
@@ -3122,29 +3212,135 @@ scard_function_disconnect_return(struct scard_client *client,
     return call_data->callback(client, ReturnCode);
 }
 
-/**
- *
- *****************************************************************************/
-static void
-scard_handle_Transmit_Return(struct stream *s, IRP *irp, tui32 DeviceId,
-                             tui32 CompletionId, tui32 IoStatus)
+/*****************************************************************************/
+/* returns error */
+static int
+scard_function_transmit_return(struct scard_client *client,
+                               void *vcall_data, struct stream *in_s,
+                               unsigned int len, unsigned int status)
 {
-    tui32 len;
+    /* see [MS-RDPESC] 2.2.3.11
+     *
+     * IDL:-
+     * typedef struct _SCardIO_Request {
+     *    unsigned long dwProtocol;
+     *    [range(0,1024)] unsigned long cbExtraBytes;
+     *    [unique] [size_is(cbExtraBytes)] byte *pbExtraBytes;
+     *    } SCardIO_Request;
+     *
+     * typedef struct _Transmit_Return {
+     *    long ReturnCode;
+     *    [unique] SCardIO_Request *pioRecvPci;
+     *    [range(0, 66560)] unsigned long cbRecvLength;
+     *    [unique] [size_is(cbRecvLength)] byte *pbRecvBuffer;
+     *    } Transmit_Return;
+     *
+     * Type summary:-
+     *
+     * ReturnCode         32-bit word
+     * pioRecvPci         Pointer to SCardIO_Request later in stream
+     * cbRecvLength       32-bit word
+     * pbRecvBuffer       Embedded full pointer to conformant array of bytes
+     *
+     * NDR:-
+     *
+     * Offset   Decription
+     * 0        ReturnCode
+     * 4        Referent identifier for pioRecvPci
+     * 8        cbRecvLength
+     * 12       Referent identifier for pbRecvBuffer
+     * if (pioRecvPci != NULL)
+     * | 16       pioRecvPci->dwProtocol
+     * | 20       pioRecvPci->cbExtraBytes
+     * | 24       Referent identifier for pioRecvPci->pbExtraBytes
+     * if (pbRecvBuffer != NULL)
+     * | ??       cbRecvLength copy
+     * | ??       pbRecvBuffer bytes
+     * if (pioRecvPci->pbExtraBytes = NULL)
+     * ??       pioRecvPci->cbExtraBytes copy
+     * ??       pioRecvPci->pbExtraBytes bytes
+     */
+    struct transmit_call *call_data = (struct transmit_call *)vcall_data;
+    unsigned int ReturnCode = XSCARD_E_UNEXPECTED;
+    unsigned int cbRecvLength = 0;
+    unsigned int recv_pci_ref = 0;
+    unsigned int recv_buff_ref = 0;
+    struct scard_io_request *pioRecvPci = NULL;
+    const char *pbRecvBuffer = NULL;
 
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "entered");
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_transmit_return:");
 
-    /* sanity check */
-    if ((DeviceId != irp->DeviceId) || (CompletionId != irp->CompletionId))
+    if (status != XSCARD_S_SUCCESS && status != XSCARD_E_INSUFFICIENT_BUFFER)
     {
-        LOG_DEVEL(LOG_LEVEL_ERROR, "DeviceId/CompletionId do not match those in IRP");
-        return;
+        goto done;
+    }
+    if (!s_check_rem_and_log(in_s, 8 + 8 + 4 + 4 + 4 + 4,
+                             "[MS-RDPESC] Transmit_Return"))
+    {
+        ReturnCode = XSCARD_F_INTERNAL_ERROR;
+        goto done;
+    }
+    in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.1 */
+    in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.2 */
+
+    in_uint32_le(in_s, ReturnCode);
+    in_uint32_le(in_s, recv_pci_ref);
+    in_uint32_le(in_s, cbRecvLength);
+    in_uint32_le(in_s, recv_buff_ref);
+
+    if (recv_pci_ref != 0)
+    {
+        unsigned int dwProtocol;
+        unsigned int cbExtraBytes;
+        if (!s_check_rem_and_log(in_s, 4 + 4 + 4,
+                                 "[MS-RDPESC] Transmit_Return(2)"))
+        {
+            ReturnCode = XSCARD_F_INTERNAL_ERROR;
+            goto done;
+        }
+        in_uint32_le(in_s, dwProtocol);
+        in_uint32_le(in_s, cbExtraBytes);
+        in_uint8s(in_s, 4);
+
+        if ((pioRecvPci = MALLOC_SCARD_IO_REQUEST(cbExtraBytes)) == NULL)
+        {
+            ReturnCode = XSCARD_E_NO_MEMORY;
+            goto done;
+        }
+        pioRecvPci->dwProtocol = dwProtocol;
+        pioRecvPci->cbExtraBytes = cbExtraBytes;
+    }
+    if (recv_buff_ref != 0)
+    {
+        if (!s_check_rem_and_log(in_s, 4 + cbRecvLength,
+                                 "[MS-RDPESC] Transmit_Return(2)"))
+        {
+            ReturnCode = XSCARD_F_INTERNAL_ERROR;
+            goto done;
+        }
+        in_uint8s(in_s, 4);
+        // For the input data, just use a pointer into the stream buffer
+        pbRecvBuffer = in_s->p;
+        in_uint8s(in_s, cbRecvLength);
+    }
+    if (pioRecvPci != NULL && pioRecvPci->cbExtraBytes > 0)
+    {
+        in_align_s(in_s, 4);
+        if (!s_check_rem_and_log(in_s, 4 + pioRecvPci->cbExtraBytes,
+                                 "[MS-RDPESC] Transmit_Return(3)"))
+        {
+            ReturnCode = XSCARD_F_INTERNAL_ERROR;
+            goto done;
+        }
+        in_uint8s(in_s, 4);
+        in_uint8a(in_s, pioRecvPci->pbExtraBytes, pioRecvPci->cbExtraBytes);
     }
 
-    /* get OutputBufferLen */
-    xstream_rd_u32_le(s, len);
-    scard_function_transmit_return(irp->user_data, s, len, IoStatus);
-    devredir_irp_delete(irp);
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "leaving");
+done:
+    call_data->callback(client, ReturnCode, pioRecvPci,
+                        cbRecvLength, pbRecvBuffer);
+    free(pioRecvPci);
+    return 0;
 }
 
 /**
