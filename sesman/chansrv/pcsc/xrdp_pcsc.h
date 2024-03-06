@@ -46,7 +46,8 @@ enum pcsc_message_code
     SCARD_CANCEL              = 0x0D,
     SCARD_CANCEL_TRANSACTION  = 0x0E,
     SCARD_GET_ATTRIB          = 0x0F,
-    SCARD_SET_ATTRIB          = 0x10
+    SCARD_SET_ATTRIB          = 0x10,
+    SCARD_IS_VALID_CONTEXT    = 0x11
 };
 
 /*
@@ -214,6 +215,19 @@ enum pcsc_message_code
 // 40     cbRecvBufferLength. Either 0 (no pbRecvBuffer), or cbRecvLength
 // 44     *pbRecvBuffer
 // ??     pioRecvPci.pbExtraBytes
+//
+// *****************************************************************************
+//  C A N C E L
+// *****************************************************************************
+// Request (See [MS-RDPESC] 2.2.2.2) :-
+// Offset Value
+// 0      Header, code SCARD_CANCEL
+// 8      hCard
+//
+// Response (See [MS-RDPESC] 2.2.3.3) :-
+// Offset Value
+// 0      Header, code SCARD_CANCEL
+// 8      ReturnCode
 
 //
 

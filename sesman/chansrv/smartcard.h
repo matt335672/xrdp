@@ -141,13 +141,27 @@ struct establish_context_call
 };
 
 /**
- * Use this struct to make a release context call
+ * Code used to make a common_context_long_return call
+ */
+enum common_context_code
+{
+    CCLR_RELEASE_CONTEXT,
+    CCLR_IS_VALID_CONTEXT,
+    CCLR_CANCEL
+};
+
+/**
+ * Use this struct to make any one of these calls which
+ * share the same parameters and result:-
+ * 1) release context
+ * 2) is valid context
+ * 3) cancel
  *
  * Fill in all fields (apart from p) and pass to
- * scard_send_release_context(). The result will be received via the
- * callback, provided the client is still active.
+ * scard_send_common_context_long_return(). The result will be received
+ * via the callback, provided the client is still active.
  */
-struct release_context_call
+struct common_context_long_return_call
 {
     struct common_call_private p;
 
@@ -156,7 +170,7 @@ struct release_context_call
                     unsigned int ReturnCode);
     /* See 2.2.2.2 */
     unsigned int app_context;
-
+    enum common_context_code code;
 };
 
 /**
@@ -365,8 +379,9 @@ scard_send_establish_context(struct scard_client *client,
  * ownership of the call_data is taken away from the caller.
  */
 void
-scard_send_release_context(struct scard_client *client,
-                           struct release_context_call *call_data);
+scard_send_common_context_long_return(
+    struct scard_client *client,
+    struct common_context_long_return_call *call_data);
 
 int  scard_send_is_valid_context(void *user_data,
                                  unsigned int app_context);
@@ -477,9 +492,6 @@ int  scard_send_control(void *user_data,
                         char *card, int card_bytes,
                         char *send_data, int send_bytes,
                         int recv_bytes, int control_code);
-
-int  scard_send_cancel(void *user_data,
-                       unsigned int app_context);
 
 int  scard_send_get_attrib(void *user_data, char *card, int card_bytes,
                            READER_STATE *rs);

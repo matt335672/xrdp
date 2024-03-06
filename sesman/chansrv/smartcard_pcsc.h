@@ -37,17 +37,9 @@ int scard_function_get_status_change_return(void *user_data,
         struct stream *in_s,
         int len, int status);
 
-int scard_function_is_context_valid_return(void *user_data,
-        struct stream *in_s,
-        int len, int status);
-
 int scard_function_reconnect_return(void *user_data,
                                     struct stream *in_s,
                                     int len, int status);
-
-int scard_function_cancel_return(void *user_data,
-                                 struct stream *in_s,
-                                 int len, int status);
 
 int scard_function_get_attrib_return(void *user_data,
                                      struct stream *in_s,

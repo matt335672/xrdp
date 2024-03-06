@@ -154,11 +154,11 @@ static void
 scard_send_EstablishContext(struct stream *s,
                             struct establish_context_call *call_data);
 static void
-scard_send_ReleaseContext(struct stream *s,
-                          struct release_context_call *call_data,
-                          const struct redir_scardcontext *context);
-static void scard_send_IsContextValid(IRP *irp,
-                                      const struct redir_scardcontext *context);
+scard_send_CommonContextLongReturn(
+    struct stream *s,
+    struct common_context_long_return_call *call_data,
+    const struct redir_scardcontext *context);
+
 static void
 scard_send_ListReaders(struct stream *s,
                        struct list_readers_call *call_data,
@@ -192,8 +192,6 @@ static int scard_send_Control(IRP *irp, char *context, int context_bytes,
                               char *card, int card_bytes,
                               char *send_data, int send_bytes,
                               int recv_bytes, int control_code);
-static int scard_send_Cancel(IRP *irp,
-                             const struct redir_scardcontext *context);
 static int scard_send_GetAttrib(IRP *irp, char *card, int card_bytes,
                                 READER_STATE *rs);
 
@@ -206,13 +204,9 @@ scard_function_establish_context_return(struct scard_client *client,
                                         void *vcall_data, struct stream *in_s,
                                         unsigned int len, unsigned int status);
 static int
-scard_function_release_context_return(struct scard_client *client,
-                                      void *vcall_data, struct stream *in_s,
-                                      unsigned int len, unsigned int status);
-
-static void scard_handle_IsContextValid_Return(struct stream *s, IRP *irp,
-        tui32 DeviceId, tui32 CompletionId,
-        tui32 IoStatus);
+scard_function_common_context_return(struct scard_client *client,
+                                     void *vcall_data, struct stream *in_s,
+                                     unsigned int len, unsigned int status);
 
 static int
 scard_function_list_readers_return(struct scard_client *client,
@@ -261,11 +255,6 @@ static void scard_handle_Control_Return(struct stream *s, IRP *irp,
                                         tui32 DeviceId,
                                         tui32 CompletionId,
                                         tui32 IoStatus);
-
-static void scard_handle_Cancel_Return(struct stream *s, IRP *irp,
-                                       tui32 DeviceId,
-                                       tui32 CompletionId,
-                                       tui32 IoStatus);
 
 static void scard_handle_GetAttrib_Return(struct stream *s, IRP *irp,
         tui32 DeviceId,
@@ -463,19 +452,21 @@ scard_send_establish_context(struct scard_client *client,
 }
 
 /**
- * Release a previously established Smart Card context
+ * Sends one of several calls which take a context and return a uint32_t
  *****************************************************************************/
 void
-scard_send_release_context(struct scard_client *client,
-                           struct release_context_call *call_data)
+scard_send_common_context_long_return(
+    struct scard_client *client,
+    struct common_context_long_return_call *call_data)
 {
     IRP *irp;
     struct stream *s;
     struct redir_scardcontext Context;
+    int ioctl = 0;
 
     /* Set up common_call_private data for the return */
     call_data->p.client_id = scdata_get_client_id(client);
-    call_data->p.unmarshall_callback = scard_function_release_context_return;
+    call_data->p.unmarshall_callback = scard_function_common_context_return;
 
     /* Get the RDP-level context */
     if (!scdata_lookup_context_mapping(client,
@@ -484,65 +475,63 @@ scard_send_release_context(struct scard_client *client,
         call_data->callback(client, XSCARD_E_INVALID_HANDLE);
         free(call_data);
     }
-    /* setup up IRP */
-    else if ((irp = devredir_irp_new()) == NULL)
-    {
-        LOG_DEVEL(LOG_LEVEL_ERROR, "system out of memory");
-        call_data->callback(client, XSCARD_E_NO_MEMORY);
-        free(call_data);
-    }
     else
     {
-        irp->scard_index = g_scard_index;
-        irp->CompletionId = g_completion_id++;
-        irp->DeviceId = g_device_id;
-        irp->callback = scard_handle_irp_completion;
-        /* Pass ownership of the call_data to the IRP */
-        irp->user_data = call_data;
-        irp->extra_destructor = devredir_irp_free_user_data;
-
-        s = scard_make_new_ioctl(irp, SCARD_IOCTL_RELEASE_CONTEXT, 64);
-        if (s == NULL)
+        switch (call_data->code)
         {
-            LOG_DEVEL(LOG_LEVEL_ERROR, "scard_make_new_ioctl failed");
+            case CCLR_RELEASE_CONTEXT:
+                ioctl = SCARD_IOCTL_RELEASE_CONTEXT;
+                break;
+
+            case CCLR_IS_VALID_CONTEXT:
+                ioctl = SCARD_IOCTL_IS_VALID_CONTEXT;
+                break;
+
+            case CCLR_CANCEL:
+                ioctl = SCARD_IOCTL_CANCEL;
+                break;
+
+            default:
+                break;
+        }
+        if (ioctl == 0)
+        {
+            call_data->callback(client, XSCARD_E_INVALID_VALUE);
+            free(call_data);
+        }
+
+        /* setup up IRP */
+        else if ((irp = devredir_irp_new()) == NULL)
+        {
+            LOG_DEVEL(LOG_LEVEL_ERROR, "system out of memory");
             call_data->callback(client, XSCARD_E_NO_MEMORY);
-            devredir_irp_delete(irp);
+            free(call_data);
         }
         else
         {
-            /* send IRP to client */
-            scard_send_ReleaseContext(s, call_data, &Context);
-            free_stream(s);
+            irp->scard_index = g_scard_index;
+            irp->CompletionId = g_completion_id++;
+            irp->DeviceId = g_device_id;
+            irp->callback = scard_handle_irp_completion;
+            /* Pass ownership of the call_data to the IRP */
+            irp->user_data = call_data;
+            irp->extra_destructor = devredir_irp_free_user_data;
+
+            s = scard_make_new_ioctl(irp, ioctl, 64);
+            if (s == NULL)
+            {
+                LOG_DEVEL(LOG_LEVEL_ERROR, "scard_make_new_ioctl failed");
+                call_data->callback(client, XSCARD_E_NO_MEMORY);
+                devredir_irp_delete(irp);
+            }
+            else
+            {
+                /* send IRP to client */
+                scard_send_CommonContextLongReturn(s, call_data, &Context);
+                free_stream(s);
+            }
         }
     }
-}
-
-/**
- * Checks if a previously established context is still valid
- *****************************************************************************/
-int
-scard_send_is_valid_context(void *call_data,
-                            unsigned int app_context)
-{
-    IRP *irp;
-
-    /* setup up IRP */
-    if ((irp = devredir_irp_new()) == NULL)
-    {
-        LOG_DEVEL(LOG_LEVEL_ERROR, "system out of memory");
-        return 1;
-    }
-
-    irp->scard_index = g_scard_index;
-    irp->CompletionId = g_completion_id++;
-    irp->DeviceId = g_device_id;
-    irp->callback = scard_handle_IsContextValid_Return;
-    irp->user_data = call_data;
-
-    /* send IRP to client */
-    scard_send_IsContextValid(irp, 0);
-
-    return 0;
 }
 
 /**
@@ -1091,33 +1080,6 @@ scard_send_control(void *call_data, char *context, int context_bytes,
 }
 
 /**
- * Cancel any outstanding calls
- *****************************************************************************/
-int
-scard_send_cancel(void *call_data, unsigned int app_context)
-{
-    IRP *irp;
-
-    /* setup up IRP */
-    if ((irp = devredir_irp_new()) == NULL)
-    {
-        LOG_DEVEL(LOG_LEVEL_ERROR, "system out of memory");
-        return 1;
-    }
-
-    irp->scard_index = g_scard_index;
-    irp->CompletionId = g_completion_id++;
-    irp->DeviceId = g_device_id;
-    irp->callback = scard_handle_Cancel_Return;
-    irp->user_data = call_data;
-
-    /* send IRP to client */
-    scard_send_Cancel(irp, NULL /* context */);
-
-    return 0;
-}
-
-/**
  * Get reader attributes
  *****************************************************************************/
 int
@@ -1511,12 +1473,13 @@ scard_send_EstablishContext(struct stream *s,
 }
 
 /**
- * Release a previously established Smart Card context
+ * Send release context / is valid context / cancel
  *****************************************************************************/
 static void
-scard_send_ReleaseContext(struct stream *s,
-                          struct release_context_call *call_data,
-                          const struct redir_scardcontext *Context)
+scard_send_CommonContextLongReturn(
+    struct stream *s,
+    struct common_context_long_return_call *call_data,
+    const struct redir_scardcontext *Context)
 {
     /* see [MS-RDPESC] 3.1.4.2 */
 
@@ -1527,66 +1490,6 @@ scard_send_ReleaseContext(struct stream *s,
     out_uint32_le(s, 0x00000000);
     out_redir_scardcontext_part1(s, Context, &ref_id);
     out_redir_scardcontext_part2(s, Context);
-
-    s_mark_end(s);
-
-    s_pop_layer(s, mcs_hdr);
-    bytes = (int) (s->end - s->p);
-    bytes -= 8;
-    out_uint32_le(s, bytes);
-
-    s_pop_layer(s, iso_hdr);
-    bytes = (int) (s->end - s->p);
-    bytes -= 28;
-    out_uint32_le(s, bytes);
-
-    bytes = (int) (s->end - s->data);
-
-    /* send to client */
-    send_channel_data(g_rdpdr_chan_id, s->data, bytes);
-}
-
-/**
- * Checks if a previously established context is still valid
- *****************************************************************************/
-static void
-scard_send_IsContextValid(IRP *irp, const struct redir_scardcontext *context)
-{
-    /* see [MS-RDPESC] 3.1.4.3 */
-
-    SMARTCARD     *sc;
-    struct stream *s;
-    int            bytes;
-
-    if ((sc = smartcards[irp->scard_index]) == NULL)
-    {
-        LOG_DEVEL(LOG_LEVEL_ERROR, "smartcards[%d] is NULL", irp->scard_index);
-        return;
-    }
-
-    if ((s = scard_make_new_ioctl(irp, SCARD_IOCTL_IS_VALID_CONTEXT, 4096)) == NULL)
-    {
-        LOG_DEVEL(LOG_LEVEL_ERROR, "scard_make_new_ioctl failed");
-        return;
-    }
-
-    /*
-     * command format
-     *
-     * ......
-     *       20 bytes    padding
-     * u32    4 bytes    len 8, LE, v1
-     * u32    4 bytes    filler
-     *       16 bytes    unused (s->p currently pointed here at unused[0])
-     * u32    4 bytes    context len
-     * u32    4 bytes    context
-     */
-
-    s_push_layer(s, mcs_hdr, 4); /* bytes, set later */
-
-    /* insert context */
-    out_uint32_le(s, context->cbContext);
-    out_uint8a(s, context->pbContext, context->cbContext);
 
     s_mark_end(s);
 
@@ -2433,56 +2336,6 @@ scard_send_Control(IRP *irp, char *context, int context_bytes,
 }
 
 /**
- * Cancel any outstanding calls
- *****************************************************************************/
-static int
-scard_send_Cancel(IRP *irp, const struct redir_scardcontext *context)
-{
-    /* see [MS-RDPESC] 3.1.4.27 */
-
-    SMARTCARD     *sc;
-    struct stream *s;
-    int            bytes;
-
-    if ((sc = smartcards[irp->scard_index]) == NULL)
-    {
-        LOG_DEVEL(LOG_LEVEL_ERROR, "smartcards[%d] is NULL", irp->scard_index);
-        return 1;
-    }
-
-    if ((s = scard_make_new_ioctl(irp, SCARD_IOCTL_CANCEL, 4096)) == NULL)
-    {
-        LOG_DEVEL(LOG_LEVEL_ERROR, "scard_make_new_ioctl");
-        return 1;
-    }
-
-    s_push_layer(s, mcs_hdr, 4); /* bytes, set later */
-    out_uint32_le(s, 0x00000000);
-    out_uint32_le(s, context->cbContext);
-    out_uint32_le(s, 0x00020000);
-    out_uint32_le(s, context->cbContext);
-    out_uint8a(s, context->pbContext, context->cbContext);
-
-    s_mark_end(s);
-
-    s_pop_layer(s, mcs_hdr);
-    bytes = (int) (s->end - s->p);
-    bytes -= 8;
-    out_uint32_le(s, bytes);
-
-    s_pop_layer(s, iso_hdr);
-    bytes = (int) (s->end - s->p);
-    bytes -= 28;
-    out_uint32_le(s, bytes);
-
-    bytes = (int) (s->end - s->data);
-
-    /* send to client */
-    send_channel_data(g_rdpdr_chan_id, s->data, bytes);
-    return 0;
-}
-
-/**
  * Get reader attributes
  *****************************************************************************/
 static int
@@ -2640,10 +2493,10 @@ scard_function_establish_context_return(struct scard_client *client,
 /*****************************************************************************/
 /* returns error */
 static int
-scard_function_release_context_return(struct scard_client *client,
-                                      void *vcall_data,
-                                      struct stream *in_s,
-                                      unsigned int len, unsigned int status)
+scard_function_common_context_return(struct scard_client *client,
+                                     void *vcall_data,
+                                     struct stream *in_s,
+                                     unsigned int len, unsigned int status)
 {
     /* see [MS-RDPESC] 2.2.3.3
      *
@@ -2661,59 +2514,46 @@ scard_function_release_context_return(struct scard_client *client,
      * Offset   Decription
      * 0        ReturnCode
      */
-    struct release_context_call *call_data;
-    call_data = (struct release_context_call *)vcall_data;
+    struct common_context_long_return_call *call_data;
+    call_data = (struct common_context_long_return_call *)vcall_data;
     int ReturnCode = XSCARD_E_UNEXPECTED;
 
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_function_release_context_return:");
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_function_common_context_return:");
     LOG_DEVEL(LOG_LEVEL_DEBUG, "  status 0x%8.8x", status);
 
     if (status == 0)
     {
-        if (s_check_rem_and_log(in_s, 8 + 8 + 4,
-                                "[MS-RDPESC] Long_Return"))
+        if (s_check_rem_and_log(in_s, 8 + 8 + 4, "[MS-RDPESC] Long_Return"))
         {
             in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.1 */
             in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.2 */
 
             in_uint32_le(in_s, ReturnCode);
         }
-        if (ReturnCode == XSCARD_S_SUCCESS)
+
+        /* Special processing for message types */
+        switch (call_data->code)
         {
-            scdata_remove_context_mapping(client, call_data->app_context);
+            case CCLR_RELEASE_CONTEXT:
+                if (ReturnCode == XSCARD_S_SUCCESS)
+                {
+                    scdata_remove_context_mapping(client,
+                                                  call_data->app_context);
+                }
+                break;
+
+            case CCLR_IS_VALID_CONTEXT:
+            case CCLR_CANCEL:
+                /* No special processing */
+                break;
         }
+
         LOG_DEVEL(LOG_LEVEL_DEBUG,
-                  "scard_function_release_context_return: "
+                  "scard_function_common_context_return: "
                   "result %d", ReturnCode);
     }
 
     return call_data->callback(client, ReturnCode);
-}
-
-/**
- *
- *****************************************************************************/
-static void
-scard_handle_IsContextValid_Return(struct stream *s, IRP *irp,
-                                   tui32 DeviceId, tui32 CompletionId,
-                                   tui32 IoStatus)
-{
-    tui32 len;
-
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "entered");
-
-    /* sanity check */
-    if ((DeviceId != irp->DeviceId) || (CompletionId != irp->CompletionId))
-    {
-        LOG_DEVEL(LOG_LEVEL_ERROR, "DeviceId/CompletionId do not match those in IRP");
-        return;
-    }
-
-    /* get OutputBufferLen */
-    xstream_rd_u32_le(s, len);
-    scard_function_is_context_valid_return(irp->user_data, s, len, IoStatus);
-    devredir_irp_delete(irp);
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "leaving");
 }
 
 /*****************************************************************************/
@@ -3364,31 +3204,6 @@ scard_handle_Control_Return(struct stream *s, IRP *irp, tui32 DeviceId,
     /* get OutputBufferLen */
     xstream_rd_u32_le(s, len);
     scard_function_control_return(irp->user_data, s, len, IoStatus);
-    devredir_irp_delete(irp);
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "leaving");
-}
-
-/**
- *
- *****************************************************************************/
-static void
-scard_handle_Cancel_Return(struct stream *s, IRP *irp, tui32 DeviceId,
-                           tui32 CompletionId, tui32 IoStatus)
-{
-    tui32 len;
-
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "entered");
-
-    /* sanity check */
-    if ((DeviceId != irp->DeviceId) || (CompletionId != irp->CompletionId))
-    {
-        LOG_DEVEL(LOG_LEVEL_ERROR, "DeviceId/CompletionId do not match those in IRP");
-        return;
-    }
-
-    /* get OutputBufferLen */
-    xstream_rd_u32_le(s, len);
-    scard_function_cancel_return(irp->user_data, s, len, IoStatus);
     devredir_irp_delete(irp);
     LOG_DEVEL(LOG_LEVEL_DEBUG, "leaving");
 }

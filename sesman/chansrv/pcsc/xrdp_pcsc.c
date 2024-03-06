@@ -307,54 +307,60 @@ SCardEstablishContext(DWORD dwScope, LPCVOID pvReserved1, LPCVOID pvReserved2,
 }
 
 /*****************************************************************************/
+/**
+ * Code shared by methods which send a context and expect a long return
+ */
 PCSC_API LONG
-SCardReleaseContext(SCARDCONTEXT hContext)
+send_context_get_long_return(unsigned int code, const char *func,
+                             SCARDCONTEXT hContext)
 {
     char msg[256];
-    unsigned int code;
     unsigned int bytes;
     unsigned int ReturnCode;
 
-    LLOGLN(10, ("SCardReleaseContext:"));
+    LLOGLN(10, ("%s:", func));
     if (g_sck == -1)
     {
-        LLOGLN(0, ("SCardReleaseContext: error, not connected"));
+        LLOGLN(0, ("%s: error, not connected", func));
         return SCARD_F_INTERNAL_ERROR;
     }
     SET_UINT32(msg, 0, hContext);
-    if (send_message(SCARD_RELEASE_CONTEXT, msg, 4) != 0)
+    if (send_message(code, msg, 4) != 0)
     {
-        LLOGLN(0, ("SCardReleaseContext: error, send_message"));
+        LLOGLN(0, ("%s: error, send_message", func));
         return SCARD_F_INTERNAL_ERROR;
     }
     bytes = 256;
-    code = SCARD_RELEASE_CONTEXT;
-    if (get_message(&code, msg, &bytes) != 0)
+    ReturnCode = code;
+    if (get_message(&ReturnCode, msg, &bytes) != 0)
     {
-        LLOGLN(0, ("SCardReleaseContext: error, get_message"));
+        LLOGLN(0, ("%s: error, get_message", func));
         return SCARD_F_INTERNAL_ERROR;
     }
-    if ((code != SCARD_RELEASE_CONTEXT) || (bytes != 4))
+    if ((ReturnCode != code) || (bytes != 4))
     {
-        LLOGLN(0, ("SCardReleaseContext: error, bad code"));
+        LLOGLN(0, ("%s: error, bad code", func));
         return SCARD_F_INTERNAL_ERROR;
     }
     ReturnCode = GET_UINT32(msg, 0);
-    LLOGLN(10, ("SCardReleaseContext: got status 0x%8.8x", ReturnCode));
+    LLOGLN(10, ("%s: got status 0x%8.8x", func, ReturnCode));
     return ReturnCode;
+}
+
+/*****************************************************************************/
+PCSC_API LONG
+SCardReleaseContext(SCARDCONTEXT hContext)
+{
+    return send_context_get_long_return(SCARD_RELEASE_CONTEXT,
+                                        "SCardReleaseContext", hContext);
 }
 
 /*****************************************************************************/
 PCSC_API LONG
 SCardIsValidContext(SCARDCONTEXT hContext)
 {
-    LLOGLN(10, ("SCardIsValidContext:"));
-    if (g_sck == -1)
-    {
-        LLOGLN(0, ("SCardIsValidContext: error, not connected"));
-        return SCARD_F_INTERNAL_ERROR;
-    }
-    return SCARD_S_SUCCESS;
+    return send_context_get_long_return(SCARD_IS_VALID_CONTEXT,
+                                        "SCardIsValidContext", hContext);
 }
 
 /*****************************************************************************/
@@ -1247,38 +1253,7 @@ SCardFreeMemory(SCARDCONTEXT hContext, LPCVOID pvMem)
 PCSC_API LONG
 SCardCancel(SCARDCONTEXT hContext)
 {
-    char msg[256];
-    unsigned int code;
-    unsigned int bytes;
-    int status;
-
-    LLOGLN(10, ("SCardCancel:"));
-    if (g_sck == -1)
-    {
-        LLOGLN(0, ("SCardCancel: error, not connected"));
-        return SCARD_F_INTERNAL_ERROR;
-    }
-    SET_UINT32(msg, 0, hContext);
-    if (send_message(SCARD_CANCEL, msg, 4) != 0)
-    {
-        LLOGLN(0, ("SCardCancel: error, send_message"));
-        return SCARD_F_INTERNAL_ERROR;
-    }
-    bytes = 256;
-    code = SCARD_CANCEL;
-    if (get_message(&code, msg, &bytes) != 0)
-    {
-        LLOGLN(0, ("SCardCancel: error, get_message"));
-        return SCARD_F_INTERNAL_ERROR;
-    }
-    if ((code != SCARD_RELEASE_CONTEXT) || (bytes != 4))
-    {
-        LLOGLN(0, ("SCardCancel: error, bad code"));
-        return SCARD_F_INTERNAL_ERROR;
-    }
-    status = GET_UINT32(msg, 0);
-    LLOGLN(10, ("SCardCancel: got status 0x%8.8x", status));
-    return status;
+    return send_context_get_long_return(SCARD_CANCEL, "SCardCancel", hContext);
 }
 
 /*****************************************************************************/

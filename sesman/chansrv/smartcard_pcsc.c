@@ -326,35 +326,67 @@ send_release_context_return(struct scard_client *client,
 }
 
 /*****************************************************************************/
+static int
+send_is_valid_context_return(struct scard_client *client,
+                             unsigned int ReturnCode)
+{
+    return send_long_return(client, SCARD_IS_VALID_CONTEXT, ReturnCode);
+}
+
+/*****************************************************************************/
+static int
+send_cancel_return(struct scard_client *client,
+                   unsigned int ReturnCode)
+{
+    return send_long_return(client, SCARD_CANCEL, ReturnCode);
+}
+
+/*****************************************************************************/
 /* returns error */
 int
-scard_process_release_context(struct trans *con, struct stream *in_s)
+scard_process_common_context_long_return(struct trans *con,
+        struct stream *in_s,
+        enum common_context_code code)
 {
     struct pcsc_uds_client *uds_client;
     struct scard_client *scard_client;
-    struct release_context_call *call_data;
+    struct common_context_long_return_call *call_data;
 
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_release_context:");
+    int (*callback)(struct scard_client * client, unsigned int ReturnCode);
+
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_common_context_long_return:");
     uds_client = (struct pcsc_uds_client *) (con->callback_data);
     scard_client = uds_client->scard_client;
 
-    if (!s_check_rem_and_log(in_s, 4, "Reading SCARD_RELEASE_CONTEXT"))
+    /* Which callback are we using for this function? */
+    switch (code)
     {
-        return send_release_context_return(scard_client,
-                                           XSCARD_F_INTERNAL_ERROR);
+        case CCLR_RELEASE_CONTEXT:
+            callback = send_release_context_return;
+            break;
+        case CCLR_IS_VALID_CONTEXT:
+            callback = send_is_valid_context_return;
+            break;
+        default:
+            callback = send_cancel_return;
+    }
+
+    if (!s_check_rem_and_log(in_s, 4, "Reading SCARD CONTEXT"))
+    {
+        return callback(scard_client, XSCARD_F_INTERNAL_ERROR);
     }
 
     /* Allocate a block to describe the call */
-    if ((call_data = g_new0(struct release_context_call, 1)) == NULL)
+    if ((call_data = g_new0(struct common_context_long_return_call, 1)) == NULL)
     {
-        return send_release_context_return(scard_client,
-                                           XSCARD_E_NO_MEMORY);
+        return callback(scard_client, XSCARD_E_NO_MEMORY);
     }
 
 
-    call_data->callback = send_release_context_return;
+    call_data->callback = callback;
     in_uint32_le(in_s, call_data->app_context);
-    scard_send_release_context(scard_client, call_data);
+    call_data->code = code;
+    scard_send_common_context_long_return(scard_client, call_data);
     return 0;
 }
 
@@ -1254,83 +1286,6 @@ scard_function_get_status_change_return(void *user_data,
 
 /*****************************************************************************/
 /* returns error */
-int
-scard_process_cancel(struct trans *con, struct stream *in_s)
-{
-    int hContext;
-    struct pcsc_uds_client *uds_client;
-    void *user_data = 0;
-    struct pcsc_context *lcontext;
-
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_cancel:");
-    uds_client = (struct pcsc_uds_client *) (con->callback_data);
-    in_uint32_le(in_s, hContext);
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_cancel: hContext 0x%8.8x", hContext);
-    //user_data = (void *) (tintptr) (uds_client->uds_client_id);
-    lcontext = get_pcsc_context_by_app_context(uds_client, hContext);
-    if (lcontext == 0)
-    {
-        LOG(LOG_LEVEL_ERROR, "scard_process_cancel: "
-            "get_pcsc_context_by_app_context failed");
-        return 1;
-    }
-    scard_send_cancel(user_data, 0 /*&lcontext->context */);
-    return 0;
-}
-
-/*****************************************************************************/
-/* returns error */
-int
-scard_function_cancel_return(void *user_data,
-                             struct stream *in_s,
-                             int len, int status)
-{
-    int bytes;
-    int uds_client_id;
-    struct stream *out_s;
-    struct pcsc_uds_client *uds_client;
-    struct trans *con;
-
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_function_cancel_return:");
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "  status 0x%8.8x", status);
-    uds_client_id = (int) (tintptr) user_data;
-    uds_client = (struct pcsc_uds_client *)
-                 get_uds_client_by_id(uds_client_id);
-    if (uds_client == 0)
-    {
-        LOG(LOG_LEVEL_ERROR, "scard_function_cancel_return: "
-            "get_uds_client_by_id failed to find uds_client_id %d",
-            uds_client_id);
-        return 1;
-    }
-    con = uds_client->con;
-    out_s = trans_get_out_s(con, 8192);
-    if (out_s == NULL)
-    {
-        return 1;
-    }
-    s_push_layer(out_s, iso_hdr, 8);
-    out_uint32_le(out_s, status); /* XSCARD_S_SUCCESS status */
-    s_mark_end(out_s);
-    bytes = (int) (out_s->end - out_s->data);
-    s_pop_layer(out_s, iso_hdr);
-    out_uint32_le(out_s, bytes - 8);
-    out_uint32_le(out_s, SCARD_CANCEL);
-    return trans_force_write(con);
-}
-
-/*****************************************************************************/
-/* returns error */
-int
-scard_function_is_context_valid_return(void *user_data,
-                                       struct stream *in_s,
-                                       int len, int status)
-{
-    return 0;
-}
-
-/*****************************************************************************/
-/* returns error */
 int scard_function_reconnect_return(void *user_data,
                                     struct stream *in_s,
                                     int len, int status)
@@ -1355,7 +1310,8 @@ scard_process_msg(struct trans *con, struct stream *in_s, int command)
             break;
         case SCARD_RELEASE_CONTEXT:
             LOG_DEVEL(LOG_LEVEL_INFO, "scard_process_msg: SCARD_RELEASE_CONTEXT");
-            rv = scard_process_release_context(con, in_s);
+            rv = scard_process_common_context_long_return(
+                     con, in_s, CCLR_RELEASE_CONTEXT);
             break;
 
         case SCARD_LIST_READERS:
@@ -1409,7 +1365,8 @@ scard_process_msg(struct trans *con, struct stream *in_s, int command)
 
         case SCARD_CANCEL:
             LOG_DEVEL(LOG_LEVEL_INFO, "scard_process_msg: SCARD_CANCEL");
-            rv = scard_process_cancel(con, in_s);
+            rv = scard_process_common_context_long_return(
+                     con, in_s, CCLR_CANCEL);
             break;
 
         case SCARD_CANCEL_TRANSACTION:
@@ -1422,6 +1379,12 @@ scard_process_msg(struct trans *con, struct stream *in_s, int command)
 
         case SCARD_SET_ATTRIB:
             LOG_DEVEL(LOG_LEVEL_INFO, "scard_process_msg: SCARD_SET_ATTRIB");
+            break;
+
+        case SCARD_IS_VALID_CONTEXT:
+            LOG_DEVEL(LOG_LEVEL_INFO, "scard_process_msg: SCARD_IS_VALID_CONTEXT");
+            rv = scard_process_common_context_long_return(
+                     con, in_s, CCLR_IS_VALID_CONTEXT);
             break;
 
         default:
