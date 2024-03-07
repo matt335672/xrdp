@@ -22,6 +22,11 @@
 #if !defined(MS_ERREF_H)
 #define MS_ERREF_H
 
+enum ERREF_FACILITY
+{
+    FACILITY_SCARD = 16
+};
+
 /*
  * HRESULT codes (section 2.1)
  */

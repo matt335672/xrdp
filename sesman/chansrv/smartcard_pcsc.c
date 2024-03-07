@@ -615,6 +615,75 @@ scard_process_connect(struct trans *con, struct stream *in_s)
 
 /*****************************************************************************/
 static int
+send_reconnect_return(struct scard_client *client,
+                      unsigned int ReturnCode,
+                      unsigned int dwActiveProtocol)
+{
+    struct pcsc_uds_client *uds_client = GET_PCSC_CLIENT(client);
+    struct trans *con = uds_client->con;
+    struct stream *out_s = trans_get_out_s(con, 64);
+    if (out_s == NULL)
+    {
+        return 1;
+    }
+
+    s_push_layer(out_s, iso_hdr, 8);
+    out_uint32_le(out_s, ReturnCode);
+    out_uint32_le(out_s, dwActiveProtocol);
+    s_mark_end(out_s);
+    unsigned int bytes = (unsigned int) (out_s->end - out_s->data);
+    s_pop_layer(out_s, iso_hdr);
+    out_uint32_le(out_s, bytes - 8);
+    out_uint32_le(out_s, SCARD_RECONNECT);
+    return trans_force_write(con);
+}
+
+/*****************************************************************************/
+/* returns error */
+int
+scard_process_reconnect(struct trans *con, struct stream *in_s)
+{
+    struct pcsc_uds_client *uds_client;
+    struct scard_client *scard_client;
+    struct reconnect_call *call_data;
+
+    unsigned int hCard;
+    unsigned int dwShareMode;
+    unsigned int dwPreferredProtocols;
+    unsigned int dwInitialization;
+
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_reconnect:");
+    uds_client = (struct pcsc_uds_client *) (con->callback_data);
+    scard_client = uds_client->scard_client;
+
+    if (!s_check_rem_and_log(in_s, 4 + 4 + 4 + 4, "Reading SCARD_RECONNECT"))
+    {
+        return send_reconnect_return(scard_client, XSCARD_F_INTERNAL_ERROR, 0);
+    }
+
+    in_uint32_le(in_s, hCard);
+    in_uint32_le(in_s, dwShareMode);
+    in_uint32_le(in_s, dwPreferredProtocols);
+    in_uint32_le(in_s, dwInitialization);
+
+    call_data = (struct reconnect_call *)malloc(sizeof * call_data);
+    if (call_data == NULL)
+    {
+        return send_reconnect_return(scard_client, XSCARD_E_NO_MEMORY, 0);
+    }
+
+    call_data->callback = send_reconnect_return;
+    call_data->app_hcard = hCard;
+    call_data->dwShareMode = dwShareMode;
+    call_data->dwPreferredProtocols = dwPreferredProtocols;
+    call_data->dwInitialization = dwInitialization;
+
+    scard_send_reconnect(scard_client, call_data);
+    return 0;
+}
+
+/*****************************************************************************/
+static int
 send_disconnect_return(struct scard_client *client, unsigned int ReturnCode)
 {
     return send_long_return(client, SCARD_DISCONNECT, ReturnCode);
@@ -936,97 +1005,97 @@ scard_process_transmit(struct trans *con, struct stream *in_s)
 /*****************************************************************************/
 /* returns error */
 int
-scard_process_control(struct trans *con, struct stream *in_s)
+send_control_return(struct scard_client *client,
+                    unsigned int ReturnCode,
+                    unsigned int cbOutBufferSize,
+                    const char *pbRecvBuffer)
 {
-    int hCard;
-    int send_bytes;
-    int recv_bytes;
-    int control_code;
-    char *send_data;
-    struct pcsc_uds_client *uds_client;
-    void *user_data = 0;
-    struct pcsc_context *lcontext;
-    struct pcsc_card *lcard;
+    struct pcsc_uds_client *uds_client = GET_PCSC_CLIENT(client);
+    unsigned int stream_size = 64;
 
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_control:");
-    uds_client = (struct pcsc_uds_client *) (con->callback_data);
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_control:");
-
-    in_uint32_le(in_s, hCard);
-    in_uint32_le(in_s, control_code);
-    in_uint32_le(in_s, send_bytes);
-    in_uint8p(in_s, send_data, send_bytes);
-    in_uint32_le(in_s, recv_bytes);
-
-    //user_data = (void *) (tintptr) (uds_client->uds_client_id);
-    lcard = get_pcsc_card_by_app_card(uds_client, hCard, &lcontext);
-    if ((lcard == 0) || (lcontext == 0))
+    if (ReturnCode == XSCARD_S_SUCCESS)
     {
-        LOG(LOG_LEVEL_ERROR, "scard_process_control: "
-            "get_pcsc_card_by_app_card failed");
+        stream_size += cbOutBufferSize;
+    }
+
+    struct trans *con = uds_client->con;
+    struct stream *out_s = trans_get_out_s(con, stream_size);
+    if (out_s == NULL)
+    {
         return 1;
     }
-    scard_send_control(user_data, lcontext->context.pbContext,
-                       lcontext->context.cbContext,
-                       lcard->card, lcard->card_bytes,
-                       send_data, send_bytes, recv_bytes,
-                       control_code);
 
-    return 0;
+    s_push_layer(out_s, iso_hdr, 8);
+    out_uint32_le(out_s, ReturnCode);
+    out_uint32_le(out_s, cbOutBufferSize);
+    if (ReturnCode == XSCARD_S_SUCCESS)
+    {
+        out_uint8a(out_s, pbRecvBuffer, cbOutBufferSize);
+    }
+    s_mark_end(out_s);
+    unsigned int bytes = (unsigned int) (out_s->end - out_s->data);
+    s_pop_layer(out_s, iso_hdr);
+    out_uint32_le(out_s, bytes - 8);
+    out_uint32_le(out_s, SCARD_CONTROL);
+    return trans_force_write(con);
 }
 
 /*****************************************************************************/
 /* returns error */
 int
-scard_function_control_return(void *user_data,
-                              struct stream *in_s,
-                              int len, int status)
+scard_process_control(struct trans *con, struct stream *in_s)
 {
-    struct stream *out_s;
-    int bytes;
-    int cbRecvLength;
-    char *recvBuf;
-    int uds_client_id;
     struct pcsc_uds_client *uds_client;
-    struct trans *con;
+    struct scard_client *scard_client;
+    struct control_call *call_data;
 
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_function_control_return:");
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "  status 0x%8.8x", status);
-    uds_client_id = (int) (tintptr) user_data;
-    uds_client = (struct pcsc_uds_client *)
-                 get_uds_client_by_id(uds_client_id);
-    if (uds_client == 0)
+    unsigned int hCard;
+    unsigned int dwControlCode;
+    unsigned int cbSendLength;
+    unsigned int cbRecvLength;
+
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_control:");
+    uds_client = (struct pcsc_uds_client *) (con->callback_data);
+    scard_client = uds_client->scard_client;
+
+    if (!s_check_rem_and_log(in_s, 4 + 4 + 4 + 4,
+                             "Reading SCARD_CONTROL(1)"))
     {
-        LOG(LOG_LEVEL_ERROR, "scard_function_control_return: "
-            "get_uds_client_by_id failed to find uds_client_id %d",
-            uds_client_id);
-        return 1;
+        return send_control_return(scard_client,
+                                   XSCARD_F_INTERNAL_ERROR, 0, NULL);
     }
-    con = uds_client->con;
-    cbRecvLength = 0;
-    recvBuf = 0;
-    if (status == 0)
+    in_uint32_le(in_s, hCard);
+    in_uint32_le(in_s, dwControlCode);
+    in_uint32_le(in_s, cbSendLength);
+    in_uint32_le(in_s, cbRecvLength);
+
+    if (!s_check_rem_and_log(in_s, cbSendLength,
+                             "Reading SCARD_CONTROL(2)"))
     {
-        in_uint8s(in_s, 28);
-        in_uint32_le(in_s, cbRecvLength);
-        in_uint8p(in_s, recvBuf, cbRecvLength);
+        return send_control_return(scard_client,
+                                   XSCARD_F_INTERNAL_ERROR, 0, NULL);
     }
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_function_control_return: cbRecvLength %d", cbRecvLength);
-    out_s = trans_get_out_s(con, 8192);
-    if (out_s == NULL)
+
+    unsigned int call_data_size =
+        offsetof(struct control_call, pbSendBuffer) +
+        cbSendLength * sizeof(call_data->pbSendBuffer[0]);
+
+    call_data = (struct control_call *)malloc(call_data_size);
+    if (call_data == NULL)
     {
-        return 1;
+        return send_control_return(scard_client,
+                                   XSCARD_E_NO_MEMORY, 0, NULL);
     }
-    s_push_layer(out_s, iso_hdr, 8);
-    out_uint32_le(out_s, cbRecvLength);
-    out_uint8a(out_s, recvBuf, cbRecvLength);
-    out_uint32_le(out_s, status); /* XSCARD_S_SUCCESS status */
-    s_mark_end(out_s);
-    bytes = (int) (out_s->end - out_s->data);
-    s_pop_layer(out_s, iso_hdr);
-    out_uint32_le(out_s, bytes - 8);
-    out_uint32_le(out_s, SCARD_CONTROL);
-    return trans_force_write(con);
+
+    call_data->callback = send_control_return;
+    call_data->app_hcard = hCard;
+    call_data->dwControlCode = dwControlCode;
+    call_data->cbSendLength = cbSendLength;
+    call_data->cbRecvLength = cbRecvLength;
+    in_uint8a(in_s, call_data->pbSendBuffer, cbSendLength);
+
+    scard_send_control(scard_client, call_data);
+    return 0;
 }
 
 /*****************************************************************************/
@@ -1286,15 +1355,6 @@ scard_function_get_status_change_return(void *user_data,
 
 /*****************************************************************************/
 /* returns error */
-int scard_function_reconnect_return(void *user_data,
-                                    struct stream *in_s,
-                                    int len, int status)
-{
-    return 0;
-}
-
-/*****************************************************************************/
-/* returns error */
 int
 scard_process_msg(struct trans *con, struct stream *in_s, int command)
 {
@@ -1326,6 +1386,7 @@ scard_process_msg(struct trans *con, struct stream *in_s, int command)
 
         case SCARD_RECONNECT:
             LOG_DEVEL(LOG_LEVEL_INFO, "scard_process_msg: SCARD_RECONNECT");
+            rv = scard_process_reconnect(con, in_s);
             break;
 
         case SCARD_DISCONNECT:

@@ -229,6 +229,29 @@ struct connect_call
 };
 
 /**
+ * Use this struct to make a reconnect call
+ *
+ * Fill in all fields (apart from p) and pass to
+ * scard_send_reconnect(). The result will be received via the
+ * callback, provided the client is still active.
+ */
+struct reconnect_call
+{
+    struct common_call_private p;
+
+    /** How to pass the result back to the client */
+    int (*callback)(struct scard_client *client,
+                    unsigned int ReturnCode,
+                    unsigned int dwActiveProtocol);
+
+    /* See 2.2.2.15 */
+    unsigned int app_hcard;
+    unsigned int dwShareMode;
+    unsigned int dwPreferredProtocols;
+    unsigned int dwInitialization;
+};
+
+/**
  * Use this struct to make a status call
  *
  * Fill in all fields (apart from p) and pass to
@@ -309,6 +332,35 @@ struct transmit_call
     char pbSendBuffer[];
 #endif
 };
+/**
+ * Use this struct to make a control call
+ *
+ * Fill in all fields (apart from p) and pass to
+ * scard_send_control(). The result will be received via the
+ * callback, provided the client is still active.
+ */
+struct control_call
+{
+    struct common_call_private p;
+
+    /** How to pass the result back to the client */
+    int (*callback)(struct scard_client *client,
+                    unsigned int ReturnCode,
+                    unsigned int cbOutBufferSize,
+                    const char *pbRecvBuffer);
+
+    /* See 2.2.2.20 */
+    unsigned int app_hcard;
+    unsigned int dwControlCode;
+    unsigned int cbSendLength;
+    unsigned int cbRecvLength;
+#ifdef __cplusplus
+    char pbSendBuffer[1];
+#else
+    char pbSendBuffer[];
+#endif
+};
+
 
 void scard_device_announce(tui32 device_id);
 int  scard_get_wait_objs(tbus *objs, int *count, int *timeout);
@@ -358,7 +410,7 @@ void *
 scard_client_get_cb_data(struct scard_client *client, unsigned char key);
 
 /**
- * Sends an establish_context call to the RDP service
+ * Sends an establish_context call to the RDP client
  *
  * @param client client
  * @param call_data Info about the call
@@ -370,7 +422,7 @@ void
 scard_send_establish_context(struct scard_client *client,
                              struct establish_context_call *call_data);
 /**
- * Sends a release_context call to the RDP service
+ * Sends a release_context / is valid context / cancel call to the RDP client
  *
  * @param client client
  * @param call_data Info about the call
@@ -383,10 +435,8 @@ scard_send_common_context_long_return(
     struct scard_client *client,
     struct common_context_long_return_call *call_data);
 
-int  scard_send_is_valid_context(void *user_data,
-                                 unsigned int app_context);
 /**
- * Sends a list_readers call to the RDP service
+ * Sends a list_readers call to the RDP client
  *
  * @param client client
  * @param call_data Info about the call
@@ -404,7 +454,7 @@ int  scard_send_get_status_change(void *user_data,
                                   tui32 num_readers, READER_STATE *rsa);
 
 /**
- * Sends a connect call to the RDP service
+ * Sends a connect call to the RDP client
  *
  * @param client client
  * @param call_data Info about the call
@@ -416,13 +466,21 @@ void
 scard_send_connect(struct scard_client *client,
                    struct connect_call *call_data);
 
-int  scard_send_reconnect(void *user_data,
-                          char *context, int context_bytes,
-                          char *card, int card_bytes,
-                          READER_STATE *rs);
+/**
+ * Sends a reconnect call to the RDP client
+ *
+ * @param client client
+ * @param call_data Info about the call
+ *
+ * The call_data must be on the heap. After this call,
+ * ownership of the call_data is taken away from the caller.
+ */
+void
+scard_send_reconnect(struct scard_client *client,
+                     struct reconnect_call *call_data);
 
 /**
- * Sends a begin transaction call to the RDP service
+ * Sends a begin transaction call to the RDP client
  *
  * @param client client
  * @param call_data Info about the call
@@ -435,7 +493,7 @@ scard_send_begin_transaction(struct scard_client *client,
                              struct hcard_and_disposition_call *call_data);
 
 /**
- * Sends an end transaction call to the RDP service
+ * Sends an end transaction call to the RDP client
  *
  * @param client client
  * @param call_data Info about the call
@@ -448,7 +506,7 @@ scard_send_end_transaction(struct scard_client *client,
                            struct hcard_and_disposition_call *call_data);
 
 /**
- * Sends a status call to the RDP service
+ * Sends a status call to the RDP client
  *
  * @param client client
  * @param call_data Info about the call
@@ -461,7 +519,7 @@ scard_send_status(struct scard_client *client,
                   struct status_call *call_data);
 
 /**
- * Sends a disconnect call to the RDP service
+ * Sends a disconnect call to the RDP client
  *
  * @param client client
  * @param call_data Info about the call
@@ -475,23 +533,31 @@ scard_send_disconnect(struct scard_client *client,
 
 
 /**
- * Sends a transmit call to the RDP service
+ * Sends a transmit call to the RDP client
  *
  * @param client client
  * @param call_data Info about the call
  *
- * The call_data (and some call_data members) must be on the heap. After
- * this call, ownership of the call_data is taken away from the caller.
+ * The call_data (and members pioSendPci and pioRecvPci if used) must
+ * be on the heap. After this call, ownership of the call_data is taken
+ * away from the caller.
  */
 void
 scard_send_transmit(struct scard_client *client,
                     struct transmit_call *call_data);
 
-int  scard_send_control(void *user_data,
-                        char *context, int context_bytes,
-                        char *card, int card_bytes,
-                        char *send_data, int send_bytes,
-                        int recv_bytes, int control_code);
+/**
+ * Sends a control call to the RDP client
+ *
+ * @param client client
+ * @param call_data Info about the call
+ *
+ * The call_data must be on the heap. After this call, ownership of the
+ * call_data is taken away from the caller.
+ */
+void
+scard_send_control(struct scard_client *client,
+                   struct control_call *call_data);
 
 int  scard_send_get_attrib(void *user_data, char *card, int card_bytes,
                            READER_STATE *rs);

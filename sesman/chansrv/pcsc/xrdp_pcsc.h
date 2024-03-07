@@ -228,6 +228,41 @@ enum pcsc_message_code
 // Offset Value
 // 0      Header, code SCARD_CANCEL
 // 8      ReturnCode
+//
+// *****************************************************************************
+//  C O N T R O L
+// *****************************************************************************
+// Request (See [MS-RDPESC] 2.2.2.20) :-
+// Offset Value
+// 0      Header, code SCARD_CONTROL
+// 8      hCard
+// 12     dwControlCode (PCSC-Lite definition)
+// 16     cbSendLength
+// 20     cbRecvLength
+// 24     *pbSendBuffer
+//
+// Response (See [MS-RDPESC] 2.2.3.6) :-
+// Offset Value
+// 0      Header, code SCARD_CONTROL
+// 8      ReturnCode
+// 12     cbOutBufferSize
+// 16     *pvOutBuffer (only if ReturnCode == SCARD_S_SUCCESS)
+//
+// *****************************************************************************
+//  R E C O N N E C T
+// *****************************************************************************
+// Request (See [MS-RDPESC] 2.2.2.15)
+// 0      Header, code SCARD_RECONNECT
+// 8      hCard
+// 12     dwShareMode
+// 16     dwPreferredProtocols
+// 20     dwInitialization
+//
+// Response (See [MS-RDPESC] 2.2.3.7) :-
+// Offset Value
+// 0      Header, code SCARD_RECONNECT
+// 8      ReturnCode
+// 12     dwActiveProtocol
 
 //
 
