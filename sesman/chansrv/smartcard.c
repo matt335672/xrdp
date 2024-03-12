@@ -400,9 +400,12 @@ scard_handle_irp_completion(struct stream *s, IRP *irp,
     scard_client = scdata_get_client_from_id(call_data_private->client_id);
     if (scard_client != NULL)
     {
-        tui32 len;
+        tui32 len = 0;
         /* get OutputBufferLen */
-        xstream_rd_u32_le(s, len);
+        if (s_check_rem(s, 4))
+        {
+            xstream_rd_u32_le(s, len);
+        }
         call_data_private->unmarshall_callback(scard_client, call_data_private,
                                                s, len,
                                                IoStatus);
@@ -1194,11 +1197,12 @@ scard_make_new_ioctl(IRP *irp, tui32 ioctl, unsigned int ndr_size)
      * u32       MinorFunction
      *
      * u32       OutputBufferLength SHOULD be 2048
-     * u32       InputBufferLength
+     * u32       InputBufferLength    <-- stream iso_hdr points here
      * u32       IoControlCode
      * 20 bytes  padding
-     * xx bytes  InputBuffer (variable). First 8 bytes are the NDR
-     *           common type header
+     * xx bytes  InputBuffer (variable):-
+     *           . First 8 bytes are the NDR common type header
+     *           . <-- stream mcs_hdr points here (64 bytes in)
      */
 
     struct stream *s;
@@ -1309,10 +1313,16 @@ scard_release_resources(void)
 }
 
 /*****************************************************************************/
+/**
+ * Align the output stream on a boundary
+ *
+ * @pre The mcs_hdr field is set to point to the start of the NDR
+ *      constructed data type header
+ */
 static void
 out_align_s(struct stream *s, unsigned int boundary)
 {
-    unsigned int over = (unsigned int)(s->p - s->data) % boundary;
+    unsigned int over = (unsigned int)(s->p - s->mcs_hdr) % boundary;
     if (over != 0)
     {
         out_uint8s(s, boundary - over);
@@ -1320,10 +1330,16 @@ out_align_s(struct stream *s, unsigned int boundary)
 }
 
 /*****************************************************************************/
+/**
+ * Align the input stream on a boundary
+ *
+ * @pre The mcs_hdr field is set to point to the start of the NDR
+ *      constructed data type header
+ */
 static void
 in_align_s(struct stream *s, unsigned int boundary)
 {
-    unsigned int over = (unsigned int)(s->p - s->data) % boundary;
+    unsigned int over = (unsigned int)(s->p - s->mcs_hdr) % boundary;
     if (over != 0)
     {
         unsigned int seek = boundary - over;
@@ -1540,6 +1556,7 @@ scard_send_CommonContextLongReturn(
     out_redir_scardcontext_part1(s, Context, &ref_id);
     out_redir_scardcontext_part2(s, Context);
 
+    out_align_s(s, 8); // [MS-RPCE] 2.2.6.2 */
     s_mark_end(s);
 
     s_pop_layer(s, mcs_hdr);
@@ -1608,16 +1625,9 @@ scard_send_ListReaders(struct stream *s,
 
     unsigned int ref_id = REFERENT_ID_BASE; /* Next referent ID to use */
     int            bytes;
-    int            val = 0;    // Referent Id for mszGroups (assume NULL)
     const char *mszGroups = call_data->mszGroups;
     unsigned int cBytes = call_data->cBytes;
 
-    if (cBytes > 0)
-    {
-        // Get the length of the groups as a UTF-16 string
-        cBytes = utf8_as_utf16_word_count(mszGroups, cBytes) * 2;
-        val = 0x00020004;
-    }
 
     /* Private Header ([MS-RPCE] 2.2.6.2 */
     s_push_layer(s, mcs_hdr, 4); /* bytes, set later */
@@ -1628,7 +1638,15 @@ scard_send_ListReaders(struct stream *s,
     // [range(0, 65536)] unsigned long cBytes;
     out_uint32_le(s, cBytes);
     // [unique] [size_is(cBytes)] const byte *mszGroups; (pointer)
-    out_uint32_le(s, val);
+    if (cBytes > 0)
+    {
+        out_uint32_le(s, ref_id);
+        ref_id += REFERENT_ID_INC;
+    }
+    else
+    {
+        out_uint32_le(s, 0);
+    }
     // long fmszReadersIsNULL;
     out_uint32_le(s, 0x000000);
     // unsigned long cchReaders;
@@ -1643,6 +1661,8 @@ scard_send_ListReaders(struct stream *s,
     if (cBytes > 0)
     {
         out_align_s(s, 4);
+        // Get the length of the groups as a UTF-16 string
+        cBytes = utf8_as_utf16_word_count(mszGroups, cBytes) * 2;
         out_uint32_le(s, cBytes);
         out_utf8_as_utf16_le(s, mszGroups, cBytes);
     }
@@ -2381,27 +2401,30 @@ scard_send_Control(struct stream *s, struct control_call *call_data,
      * ??       pvInBuffer data
      */
 
-    unsigned int ControlCodeWin;
+    unsigned int ControlCode;
     int          bytes;
     unsigned int ref_id = REFERENT_ID_BASE; /* Next referent ID to use */
 
-    /* Convert the dwControlCode to a Windows value
-     *
-     * PCSC-Lite : SCARD_CTL_CODE(x) -> 0x42000000 + x
-     * Windows : SCARD_CTL_CODE(x) -> CTL_CODE(FILE_DEVICE_SMARTCARD,
-     *                                      x,
-     *                                      METHOD_BUFFERED,
-     *                                      FILE_ANY_ACCESS)
-     *                              -> ( (FILE_DEVICE_SMARTCARD << 16) |
-     *                                   (FILE_ANY_ACCESS << 14) |
-     *                                   (x << 2) |
-     *                                    METHOD_BUFFERED )
-     *                              -> ( (0x31 << 16) | (0 << 14) |
-     *                                   (x << 2) | 0)
-     */
-
-    ControlCodeWin = ((call_data->dwControlCode - 0x42000000) & 0xfff) << 2;
-    ControlCodeWin = ControlCodeWin | (0x31 << 16);
+    ControlCode = call_data->dwControlCode;
+    if (ControlCode >= 0x42000000 && ControlCode < 0x42001000)
+    {
+        /* Convert the PCSC-Lite dwControlCode to a Windows value
+         *
+         * PCSC-Lite : SCARD_CTL_CODE(x) -> 0x42000000 + x
+         * Windows : SCARD_CTL_CODE(x) -> CTL_CODE(FILE_DEVICE_SMARTCARD,
+         *                                      x,
+         *                                      METHOD_BUFFERED,
+         *                                      FILE_ANY_ACCESS)
+         *                              -> ( (FILE_DEVICE_SMARTCARD << 16) |
+         *                                   (FILE_ANY_ACCESS << 14) |
+         *                                   (x << 2) |
+         *                                    METHOD_BUFFERED )
+         *                              -> ( (0x31 << 16) | (0 << 14) |
+         *                                   (x << 2) | 0)
+         */
+        ControlCode = (ControlCode & 0xfff) << 2;
+        ControlCode |= (0x31 << 16);
+    }
 
     s_push_layer(s, mcs_hdr, 4); /* bytes, set later */
     out_uint32_le(s, 0x00000000);
@@ -2410,7 +2433,7 @@ scard_send_Control(struct stream *s, struct control_call *call_data,
     out_redir_scardhandle_part1(s, hCard, &ref_id);
 
     // unsigned long dwControlCode;
-    out_uint32_le(s, ControlCodeWin);
+    out_uint32_le(s, ControlCode);
     // [range(0,66560)] unsigned long cbInBufferSize;
     out_uint32_le(s, call_data->cbSendLength);
     // [unique] [size_is(cbInBufferSize)] const byte *pvInBuffer;
@@ -2562,54 +2585,73 @@ scard_function_establish_context_return(struct scard_client *client,
      * 0        ReturnCode
      * 4        Context.cbContext
      * 8        Context.pbContext Referent Identifier
-     * 12       length of context in bytes
-     * 16       Context data (up to 16 bytes)
+     * if (Context.pbContext Referent Identifier != NULL)
+     * | 12     length of context in bytes
+     * | 16     Context data (up to 16 bytes)
      */
     struct establish_context_call *call_data;
     call_data = (struct establish_context_call *)vcall_data;
     unsigned int ReturnCode = HRESULT_TO_SCARD_STATUS(status);
+    unsigned int context_ref_ident;
     struct redir_scardcontext Context = {0};
     unsigned int app_context = 0;
 
     LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_function_establish_context_return:");
     LOG_DEVEL(LOG_LEVEL_DEBUG, "  status 0x%8.8x", status);
 
-    if (status == 0)
+    if (status != 0)
     {
-        if (s_check_rem_and_log(in_s, 8 + 8 + 4 + 4 + 4 + 4,
-                                "[MS-RDPESC] EstablishContext_Return(1)"))
-        {
-            in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.1 */
-            in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.2 */
-
-            in_uint32_le(in_s, ReturnCode);
-            in_uint32_le(in_s, Context.cbContext); // Context.cbContext
-            in_uint8s(in_s, 4); // Context.pbContext Referent Identifier
-            in_uint8s(in_s, 4); // Context.pbContext copy
-            if (Context.cbContext > sizeof(Context.pbContext))
-            {
-                LOG(LOG_LEVEL_ERROR, "scard_function_establish_context_return:"
-                    " opps context_bytes %u", Context.cbContext);
-                Context.cbContext =  sizeof(Context.pbContext);
-            }
-            if (s_check_rem_and_log(in_s, Context.cbContext,
-                                    "[MS-RDPESC] EstablishContext_Return(2)"))
-            {
-                in_uint8a(in_s, Context.pbContext, Context.cbContext);
-            }
-        }
-        if (ReturnCode == XSCARD_S_SUCCESS)
-        {
-            if (!scdata_add_context_mapping(client, &Context, &app_context))
-            {
-                // TODO: Release context at client?
-                ReturnCode = XSCARD_E_NO_MEMORY;
-            }
-        }
-        LOG_DEVEL(LOG_LEVEL_DEBUG,
-                  "scard_function_establish_context_return: "
-                  "result %d app_context %d", ReturnCode, app_context);
+        goto done;
     }
+    if (!s_check_rem_and_log(in_s, 8 + 8 + 4 + 4 + 4,
+                             "[MS-RDPESC] EstablishContext_Return(1)"))
+    {
+        ReturnCode = XSCARD_E_PROTO_MISMATCH;
+        goto done;
+    }
+
+    /* Skip headers, setting mcs_hdr to point to the NDR
+     * constructed type header so we can use in_align_s() */
+    in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.1 */
+    s_push_layer(in_s, mcs_hdr, 8); /* [MS-RPCE] 2.2.6.2 */
+
+    in_uint32_le(in_s, ReturnCode);
+    in_uint32_le(in_s, Context.cbContext); // Context.cbContext
+    in_uint32_le(in_s, context_ref_ident);
+    if (Context.cbContext > sizeof(Context.pbContext))
+    {
+        LOG(LOG_LEVEL_ERROR, "scard_function_establish_context_return:"
+            " oops context_bytes %u", Context.cbContext);
+        ReturnCode = XSCARD_E_PROTO_MISMATCH;
+        goto done;
+    }
+    if (context_ref_ident == 0) // pbContext is NULL
+    {
+        Context.cbContext = 0;
+    }
+    else
+    {
+        if (!s_check_rem_and_log(in_s, 4 + Context.cbContext,
+                                 "[MS-RDPESC] EstablishContext_Return(2)"))
+        {
+            ReturnCode = XSCARD_E_PROTO_MISMATCH;
+            goto done;
+        }
+        in_uint8s(in_s, 4); // Context.cbContext copy
+        in_uint8a(in_s, Context.pbContext, Context.cbContext);
+    }
+
+done:
+    if (ReturnCode == XSCARD_S_SUCCESS)
+    {
+        if (!scdata_add_context_mapping(client, &Context, &app_context))
+        {
+            ReturnCode = XSCARD_E_NO_MEMORY;
+        }
+    }
+    LOG_DEVEL(LOG_LEVEL_DEBUG,
+              "scard_function_establish_context_return: "
+              "result %d app_context %d", ReturnCode, app_context);
 
     return call_data->callback(client, ReturnCode, app_context);
 }
@@ -2649,8 +2691,10 @@ scard_function_common_context_return(struct scard_client *client,
     {
         if (s_check_rem_and_log(in_s, 8 + 8 + 4, "[MS-RDPESC] Long_Return"))
         {
+            /* Skip headers, setting mcs_hdr to point to the NDR
+             * constructed type header so we can use in_align_s() */
             in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.1 */
-            in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.2 */
+            s_push_layer(in_s, mcs_hdr, 8); /* [MS-RPCE] 2.2.6.2 */
 
             in_uint32_le(in_s, ReturnCode);
         }
@@ -2729,8 +2773,10 @@ scard_function_list_readers_return(struct scard_client *client,
         if (s_check_rem_and_log(in_s, 8 + 8 + 4 + 4 + 4 + 4,
                                 "[MS-RDPESC] ListReaders_return(1)"))
         {
+            /* Skip headers, setting mcs_hdr to point to the NDR
+             * constructed type header so we can use in_align_s() */
             in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.1 */
-            in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.2 */
+            s_push_layer(in_s, mcs_hdr, 8); /* [MS-RPCE] 2.2.6.2 */
 
             in_uint32_le(in_s, ReturnCode);
             in_uint32_le(in_s, cBytes);
@@ -2841,8 +2887,9 @@ scard_function_connect_return(struct scard_client *client,
      * if (hCard.Context.pbContext Referent Identifier != NULL)
      * | 24       length of context in bytes
      * | 28       Context data (up to 16 bytes)
-     * ??       length of handle in bytes
-     * ??       Handle data (up to 16 bytes)
+     * if (hCard.pbHandle Referent Identifier != NULL)
+     * | ??       length of handle in bytes
+     * | ??       handle data (up to 16 bytes)
      */
     struct connect_call *call_data = (struct connect_call *)vcall_data;
     unsigned int ReturnCode = HRESULT_TO_SCARD_STATUS(status);
@@ -2850,6 +2897,7 @@ scard_function_connect_return(struct scard_client *client,
     unsigned int app_hcard = 0;
     unsigned int dwActiveProtocol = 0;
     unsigned int context_ref_ident;
+    unsigned int handle_ref_ident;
     LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_function_connect_return:");
     LOG_DEVEL(LOG_LEVEL_DEBUG, "  status 0x%8.8x", status);
 
@@ -2857,38 +2905,75 @@ scard_function_connect_return(struct scard_client *client,
     {
         goto done;
     }
-    if (!s_check_rem_and_log(in_s, 8 + 8 + 4 + 4 + 4 + 4 + 4 + 4 + 4,
+    if (!s_check_rem_and_log(in_s, 8 + 8 +
+                             4 + // ReturnCode
+                             4 + // hCard.Context.cbContext
+                             4 + // hCard.Context.pbContext (ref_id)
+                             4 + // hcard.cbHandle
+                             4 + // hcard.pbHandle (ref_id)
+                             4,  // dwActiveProtocol
                              "[MS-RDPESC] EstablishContext_Return(1)"))
     {
         goto done;
     }
+    /* Skip headers, setting mcs_hdr to point to the NDR
+     * constructed type header so we can use in_align_s() */
     in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.1 */
-    in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.2 */
+    s_push_layer(in_s, mcs_hdr, 8); /* [MS-RPCE] 2.2.6.2 */
 
     in_uint32_le(in_s, ReturnCode);
     in_uint32_le(in_s, hCard.Context.cbContext);
     in_uint32_le(in_s, context_ref_ident);
     in_uint32_le(in_s, hCard.cbHandle);
-    in_uint8s(in_s, 4); // hcard.pbHandle Referent Identifier
+    in_uint32_le(in_s, handle_ref_ident);
     in_uint32_le(in_s, dwActiveProtocol);
-    if (context_ref_ident != 0) // pbContext may be NULL
+    if (context_ref_ident == 0) // pbContext is NULL
     {
-        in_uint8s(in_s, 4); // hCard.Context.cbContext copy
-        if (!s_check_rem_and_log(in_s, hCard.Context.cbContext,
-                                 "[MS-RDPESC] EstablishContext_Return(2)"))
+        hCard.Context.cbContext = 0;
+    }
+    else
+    {
+        if (hCard.Context.cbContext > sizeof(hCard.Context.pbContext))
         {
+            LOG(LOG_LEVEL_ERROR, "scard_function_connect_return:"
+                " oops context_bytes %u", hCard.Context.cbContext);
+            ReturnCode = XSCARD_E_PROTO_MISMATCH;
             goto done;
         }
+        if (!s_check_rem_and_log(in_s, 4 + hCard.Context.cbContext,
+                                 "[MS-RDPESC] EstablishContext_Return(2)"))
+        {
+            ReturnCode = XSCARD_E_PROTO_MISMATCH;
+            goto done;
+        }
+        in_uint8s(in_s, 4); // hCard.Context.cbContext copy
         in_uint8a(in_s, hCard.Context.pbContext, hCard.Context.cbContext);
         in_align_s(in_s, 4);
     }
-    in_uint8s(in_s, 4); // hCard.cbHandle copy
-    if (!s_check_rem_and_log(in_s, hCard.cbHandle,
-                             "[MS-RDPESC] EstablishContext_Return(3)"))
+
+    if (handle_ref_ident == 0) // pbHandle is NULL
     {
-        goto done;
+        hCard.cbHandle = 0;
     }
-    in_uint8a(in_s, hCard.pbHandle, hCard.cbHandle);
+    else
+    {
+        if (hCard.cbHandle > sizeof(hCard.pbHandle))
+        {
+            LOG(LOG_LEVEL_ERROR, "scard_function_connect_return:"
+                " oops handle_bytes %u", hCard.cbHandle);
+            ReturnCode = XSCARD_E_PROTO_MISMATCH;
+            goto done;
+        }
+        if (!s_check_rem_and_log(in_s, 4 + hCard.cbHandle,
+                                 "[MS-RDPESC] EstablishContext_Return(3)"))
+        {
+            ReturnCode = XSCARD_E_PROTO_MISMATCH;
+            goto done;
+        }
+        in_uint8s(in_s, 4); // hCard.cbHandle copy
+        in_uint8a(in_s, hCard.pbHandle, hCard.cbHandle);
+    }
+
     if (!scdata_add_card_mapping(client, call_data->app_context,
                                  &hCard, &app_hcard))
     {
@@ -2938,8 +3023,10 @@ scard_function_reconnect_return(struct scard_client *client,
         if (!s_check_rem_and_log(in_s, 8 + 8 + 4 + 4,
                                  "[MS-RDPESC] Reconnect_Return"))
         {
+            /* Skip headers, setting mcs_hdr to point to the NDR
+             * constructed type header so we can use in_align_s() */
             in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.1 */
-            in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.2 */
+            s_push_layer(in_s, mcs_hdr, 8); /* [MS-RPCE] 2.2.6.2 */
 
             in_uint32_le(in_s, ReturnCode);
             in_uint32_le(in_s, dwActiveProtocol);
@@ -2983,8 +3070,10 @@ scard_function_begin_transaction_return(struct scard_client *client,
         if (s_check_rem_and_log(in_s, 8 + 8 + 4,
                                 "[MS-RDPESC] Long_Return"))
         {
+            /* Skip headers, setting mcs_hdr to point to the NDR
+             * constructed type header so we can use in_align_s() */
             in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.1 */
-            in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.2 */
+            s_push_layer(in_s, mcs_hdr, 8); /* [MS-RPCE] 2.2.6.2 */
 
             in_uint32_le(in_s, ReturnCode);
         }
@@ -3030,8 +3119,10 @@ scard_function_end_transaction_return(struct scard_client *client,
         if (s_check_rem_and_log(in_s, 8 + 8 + 4,
                                 "[MS-RDPESC] Long_Return"))
         {
+            /* Skip headers, setting mcs_hdr to point to the NDR
+             * constructed type header so we can use in_align_s() */
             in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.1 */
-            in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.2 */
+            s_push_layer(in_s, mcs_hdr, 8); /* [MS-RPCE] 2.2.6.2 */
 
             in_uint32_le(in_s, ReturnCode);
         }
@@ -3106,8 +3197,10 @@ scard_function_status_return(struct scard_client *client,
     {
         goto done;
     }
+    /* Skip headers, setting mcs_hdr to point to the NDR
+     * constructed type header so we can use in_align_s() */
     in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.1 */
-    in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.2 */
+    s_push_layer(in_s, mcs_hdr, 8); /* [MS-RPCE] 2.2.6.2 */
 
     in_uint32_le(in_s, ReturnCode);
     in_uint32_le(in_s, cBytes);
@@ -3185,8 +3278,10 @@ scard_function_disconnect_return(struct scard_client *client,
         if (s_check_rem_and_log(in_s, 8 + 8 + 4,
                                 "[MS-RDPESC] Long_Return"))
         {
+            /* Skip headers, setting mcs_hdr to point to the NDR
+             * constructed type header so we can use in_align_s() */
             in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.1 */
-            in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.2 */
+            s_push_layer(in_s, mcs_hdr, 8); /* [MS-RPCE] 2.2.6.2 */
 
             in_uint32_le(in_s, ReturnCode);
         }
@@ -3266,8 +3361,10 @@ scard_function_transmit_return(struct scard_client *client,
         ReturnCode = XSCARD_F_INTERNAL_ERROR;
         goto done;
     }
+    /* Skip headers, setting mcs_hdr to point to the NDR
+     * constructed type header so we can use in_align_s() */
     in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.1 */
-    in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.2 */
+    s_push_layer(in_s, mcs_hdr, 8); /* [MS-RPCE] 2.2.6.2 */
 
     in_uint32_le(in_s, ReturnCode);
     in_uint32_le(in_s, recv_pci_ref);
@@ -3379,8 +3476,10 @@ scard_function_control_return(struct scard_client *client,
         ReturnCode = XSCARD_F_INTERNAL_ERROR;
         goto done;
     }
+    /* Skip headers, setting mcs_hdr to point to the NDR
+     * constructed type header so we can use in_align_s() */
     in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.1 */
-    in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.2 */
+    s_push_layer(in_s, mcs_hdr, 8); /* [MS-RPCE] 2.2.6.2 */
 
     in_uint32_le(in_s, ReturnCode);
     in_uint32_le(in_s, cbOutBufferSize);
