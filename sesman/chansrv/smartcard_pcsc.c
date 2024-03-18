@@ -235,6 +235,7 @@ scard_pcsc_check_wait_objs(void)
 /*****************************************************************************/
 static int
 send_establish_context_return(struct scard_client *client,
+                              intptr_t closure,
                               unsigned int ReturnCode,
                               unsigned int app_context)
 {
@@ -263,9 +264,9 @@ send_establish_context_return(struct scard_client *client,
 int
 scard_process_establish_context(struct trans *con, struct stream *in_s)
 {
+    int rv = 0;
     struct pcsc_uds_client *uds_client;
     struct scard_client *scard_client;
-    struct establish_context_call *call_data;
 
     LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_establish_context:");
     uds_client = (struct pcsc_uds_client *) (con->callback_data);
@@ -273,25 +274,21 @@ scard_process_establish_context(struct trans *con, struct stream *in_s)
 
     if (!s_check_rem_and_log(in_s, 4, "Reading SCARD_ESTABLISH_CONTEXT"))
     {
-        return send_establish_context_return(scard_client,
-                                             XSCARD_F_INTERNAL_ERROR, 0);
+        send_establish_context_return(scard_client, 0,
+                                      XSCARD_F_INTERNAL_ERROR, 0);
+        rv = 1;
     }
-
-    /* Allocate a block to describe the call */
-    if ((call_data = g_new0(struct establish_context_call, 1)) == NULL)
+    else
     {
-        return send_establish_context_return(scard_client,
-                                             XSCARD_E_NO_MEMORY, 0);
+        unsigned int dwScope;
+        in_uint32_le(in_s, dwScope);
+
+        scard_send_establish_context(scard_client,
+                                     send_establish_context_return,
+                                     0,
+                                     dwScope);
     }
-
-    call_data->callback = send_establish_context_return;
-    in_uint32_le(in_s, call_data->dwScope);
-
-    LOG_DEVEL(LOG_LEVEL_DEBUG,
-              "scard_process_establish_context: dwScope 0x%8.8x",
-              call_data->dwScope);
-    scard_send_establish_context(scard_client, call_data);
-    return 0;
+    return rv;
 }
 
 /*****************************************************************************/
@@ -320,74 +317,40 @@ send_long_return(struct scard_client *client,
 /*****************************************************************************/
 static int
 send_release_context_return(struct scard_client *client,
+                            intptr_t closure,
                             unsigned int ReturnCode)
 {
     return send_long_return(client, SCARD_RELEASE_CONTEXT, ReturnCode);
 }
 
 /*****************************************************************************/
-static int
-send_is_valid_context_return(struct scard_client *client,
-                             unsigned int ReturnCode)
-{
-    return send_long_return(client, SCARD_IS_VALID_CONTEXT, ReturnCode);
-}
-
-/*****************************************************************************/
-static int
-send_cancel_return(struct scard_client *client,
-                   unsigned int ReturnCode)
-{
-    return send_long_return(client, SCARD_CANCEL, ReturnCode);
-}
-
-/*****************************************************************************/
-/* returns error */
 int
-scard_process_common_context_long_return(struct trans *con,
-        struct stream *in_s,
-        enum common_context_code code)
+scard_process_release_context(struct trans *con, struct stream *in_s)
 {
+    int rv = 0;
     struct pcsc_uds_client *uds_client;
     struct scard_client *scard_client;
-    struct common_context_long_return_call *call_data;
 
-    int (*callback)(struct scard_client * client, unsigned int ReturnCode);
-
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_common_context_long_return:");
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_release_context:");
     uds_client = (struct pcsc_uds_client *) (con->callback_data);
     scard_client = uds_client->scard_client;
 
-    /* Which callback are we using for this function? */
-    switch (code)
+    if (!s_check_rem_and_log(in_s, 4, "Reading SCARD_RELEASE_CONTEXT"))
     {
-        case CCLR_RELEASE_CONTEXT:
-            callback = send_release_context_return;
-            break;
-        case CCLR_IS_VALID_CONTEXT:
-            callback = send_is_valid_context_return;
-            break;
-        default:
-            callback = send_cancel_return;
+        send_release_context_return(scard_client, 0, XSCARD_F_INTERNAL_ERROR);
+        rv = 1;
     }
-
-    if (!s_check_rem_and_log(in_s, 4, "Reading SCARD CONTEXT"))
+    else
     {
-        return callback(scard_client, XSCARD_F_INTERNAL_ERROR);
+        unsigned int app_context;
+        in_uint32_le(in_s, app_context);
+
+        scard_send_release_context(scard_client,
+                                   send_release_context_return,
+                                   0,
+                                   app_context);
     }
-
-    /* Allocate a block to describe the call */
-    if ((call_data = g_new0(struct common_context_long_return_call, 1)) == NULL)
-    {
-        return callback(scard_client, XSCARD_E_NO_MEMORY);
-    }
-
-
-    call_data->callback = callback;
-    in_uint32_le(in_s, call_data->app_context);
-    call_data->code = code;
-    scard_send_common_context_long_return(scard_client, call_data);
-    return 0;
+    return rv;
 }
 
 /*****************************************************************************/
@@ -428,6 +391,7 @@ send_long_and_multistring_return(struct scard_client *client,
 /*****************************************************************************/
 static int
 send_list_readers_return(struct scard_client *client,
+                         intptr_t closure,
                          unsigned int ReturnCode,
                          unsigned int cBytes,
                          const char *msz)
@@ -442,9 +406,9 @@ send_list_readers_return(struct scard_client *client,
 int
 scard_process_list_readers(struct trans *con, struct stream *in_s)
 {
+    int rv  = 0;
     struct pcsc_uds_client *uds_client;
     struct scard_client *scard_client;
-    struct list_readers_call *call_data;
 
     unsigned int hContext;
     unsigned int cBytes;
@@ -455,39 +419,168 @@ scard_process_list_readers(struct trans *con, struct stream *in_s)
 
     if (!s_check_rem_and_log(in_s, 4 + 4, "Reading SCARD_LIST_READERS(1)"))
     {
-        return send_list_readers_return(scard_client,
-                                        XSCARD_F_INTERNAL_ERROR, 0, NULL);
+        send_list_readers_return(scard_client, 0,
+                                 XSCARD_F_INTERNAL_ERROR, 0, NULL);
+        rv = 1;
     }
-    in_uint32_le(in_s, hContext);
-    in_uint32_le(in_s, cBytes);
-
-    if (!s_check_rem_and_log(in_s, cBytes,
-                             "Reading SCARD_LIST_READERS(2)"))
+    else
     {
-        return send_list_readers_return(scard_client,
-                                        XSCARD_F_INTERNAL_ERROR, 0, NULL);
+        in_uint32_le(in_s, hContext);
+        in_uint32_le(in_s, cBytes);
+
+        if (!s_check_rem_and_log(in_s, cBytes,
+                                 "Reading SCARD_LIST_READERS(2)"))
+        {
+            send_list_readers_return(scard_client, 0,
+                                     XSCARD_F_INTERNAL_ERROR, 0, NULL);
+            rv = 1;
+        }
+        else
+        {
+            scard_send_list_readers(scard_client,
+                                    send_list_readers_return, 0,
+                                    hContext, cBytes, in_s->p);
+        }
     }
-
-    unsigned int call_data_size =
-        offsetof(struct list_readers_call, mszGroups) +
-        cBytes * sizeof(call_data->mszGroups[0]);
-
-    call_data = (struct list_readers_call *)malloc(call_data_size);
-    if (call_data == NULL)
-    {
-        return send_list_readers_return(scard_client,
-                                        XSCARD_E_NO_MEMORY, 0, NULL);
-    }
-
-    call_data->callback = send_list_readers_return;
-    call_data->app_context = hContext;
-    call_data->cBytes = cBytes;
-    in_uint8a(in_s, call_data->mszGroups, cBytes);
-
-    scard_send_list_readers(scard_client, call_data);
-    return 0;
+    return rv;
 }
 
+/*****************************************************************************/
+static int
+send_connect_return(struct scard_client *client,
+                    intptr_t closure,
+                    unsigned int ReturnCode,
+                    unsigned int hCard,
+                    unsigned int dwActiveProtocol)
+{
+    struct pcsc_uds_client *uds_client = GET_PCSC_CLIENT(client);
+    struct trans *con = uds_client->con;
+    struct stream *out_s = trans_get_out_s(con, 64);
+    if (out_s == NULL)
+    {
+        return 1;
+    }
+
+    s_push_layer(out_s, iso_hdr, 8);
+    out_uint32_le(out_s, ReturnCode);
+    out_uint32_le(out_s, hCard);
+    out_uint32_le(out_s, dwActiveProtocol);
+    s_mark_end(out_s);
+    unsigned int bytes = (unsigned int) (out_s->end - out_s->data);
+    s_pop_layer(out_s, iso_hdr);
+    out_uint32_le(out_s, bytes - 8);
+    out_uint32_le(out_s, SCARD_CONNECT);
+    return trans_force_write(con);
+}
+
+/*****************************************************************************/
+/* returns error */
+int
+scard_process_connect(struct trans *con, struct stream *in_s)
+{
+    int rv = 0;
+    struct pcsc_uds_client *uds_client;
+    struct scard_client *scard_client;
+
+    unsigned int hContext;
+    unsigned int dwShareMode;
+    unsigned int dwPreferredProtocols;
+    unsigned int reader_len;
+
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_connect:");
+    uds_client = (struct pcsc_uds_client *) (con->callback_data);
+    scard_client = uds_client->scard_client;
+
+    if (!s_check_rem_and_log(in_s, 4 + 4 + 4 + 4, "Reading SCARD_CONNECT(1)"))
+    {
+        send_connect_return(scard_client, 0, XSCARD_F_INTERNAL_ERROR, 0, 0);
+        rv = 1;
+    }
+    else
+    {
+        in_uint32_le(in_s, hContext);
+        in_uint32_le(in_s, dwShareMode);
+        in_uint32_le(in_s, dwPreferredProtocols);
+        in_uint32_le(in_s, reader_len);
+
+        if (!s_check_rem_and_log(in_s, reader_len, "Reading SCARD_CONNECT(2)"))
+        {
+            send_connect_return(scard_client, 0,
+                                XSCARD_F_INTERNAL_ERROR, 0, 0);
+            rv = 1;
+        }
+        else
+        {
+            scard_send_connect(scard_client, send_connect_return, 0,
+                               hContext, dwShareMode,
+                               dwPreferredProtocols, in_s->p);
+        }
+    }
+    return rv;
+}
+
+
+/*****************************************************************************/
+static int
+send_is_valid_context_return(struct scard_client *client,
+                             unsigned int ReturnCode)
+{
+    return send_long_return(client, SCARD_IS_VALID_CONTEXT, ReturnCode);
+}
+
+/*****************************************************************************/
+static int
+send_cancel_return(struct scard_client *client,
+                   unsigned int ReturnCode)
+{
+    return send_long_return(client, SCARD_CANCEL, ReturnCode);
+}
+
+/*****************************************************************************/
+/* returns error */
+int
+scard_process_common_context_long_return(struct trans *con,
+        struct stream *in_s,
+        enum common_context_code code)
+{
+    struct pcsc_uds_client *uds_client;
+    struct scard_client *scard_client;
+    struct common_context_long_return_call *call_data;
+
+    int (*callback)(struct scard_client * client, unsigned int ReturnCode);
+
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_common_context_long_return:");
+    uds_client = (struct pcsc_uds_client *) (con->callback_data);
+    scard_client = uds_client->scard_client;
+
+    /* Which callback are we using for this function? */
+    switch (code)
+    {
+        case CCLR_IS_VALID_CONTEXT:
+            callback = send_is_valid_context_return;
+            break;
+        default:
+            callback = send_cancel_return;
+    }
+
+    if (!s_check_rem_and_log(in_s, 4, "Reading SCARD CONTEXT"))
+    {
+        return callback(scard_client, XSCARD_F_INTERNAL_ERROR);
+    }
+
+    /* Allocate a block to describe the call */
+    if ((call_data = g_new0(struct common_context_long_return_call, 1)) == NULL)
+    {
+        return callback(scard_client, XSCARD_E_NO_MEMORY);
+    }
+
+
+    call_data->callback = callback;
+    in_uint32_le(in_s, call_data->app_context);
+    call_data->code = code;
+    scard_send_common_context_long_return(scard_client, call_data);
+    return 0;
+}
 /*****************************************************************************/
 /**
  * Counts the number of non-NULL strings in a multistring
@@ -524,93 +617,6 @@ count_multistring_elements(const char *str, unsigned int len)
     }
 
     return rv;
-}
-
-
-/*****************************************************************************/
-static int
-send_connect_return(struct scard_client *client,
-                    unsigned int ReturnCode,
-                    unsigned int hCard,
-                    unsigned int dwActiveProtocol)
-{
-    struct pcsc_uds_client *uds_client = GET_PCSC_CLIENT(client);
-    struct trans *con = uds_client->con;
-    struct stream *out_s = trans_get_out_s(con, 64);
-    if (out_s == NULL)
-    {
-        return 1;
-    }
-
-    s_push_layer(out_s, iso_hdr, 8);
-    out_uint32_le(out_s, ReturnCode);
-    out_uint32_le(out_s, hCard);
-    out_uint32_le(out_s, dwActiveProtocol);
-    s_mark_end(out_s);
-    unsigned int bytes = (unsigned int) (out_s->end - out_s->data);
-    s_pop_layer(out_s, iso_hdr);
-    out_uint32_le(out_s, bytes - 8);
-    out_uint32_le(out_s, SCARD_CONNECT);
-    return trans_force_write(con);
-}
-
-/*****************************************************************************/
-/* returns error */
-int
-scard_process_connect(struct trans *con, struct stream *in_s)
-{
-    struct pcsc_uds_client *uds_client;
-    struct scard_client *scard_client;
-    struct connect_call *call_data;
-
-    unsigned int hContext;
-    unsigned int dwShareMode;
-    unsigned int dwPreferredProtocols;
-    unsigned int reader_len;
-
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_connect:");
-    uds_client = (struct pcsc_uds_client *) (con->callback_data);
-    scard_client = uds_client->scard_client;
-
-    if (!s_check_rem_and_log(in_s, 4 + 4 + 4 + 4, "Reading SCARD_CONNECT(1)"))
-    {
-        return send_connect_return(scard_client, XSCARD_F_INTERNAL_ERROR, 0, 0);
-    }
-
-    in_uint32_le(in_s, hContext);
-    in_uint32_le(in_s, dwShareMode);
-    in_uint32_le(in_s, dwPreferredProtocols);
-    in_uint32_le(in_s, reader_len);
-
-    if (!s_check_rem_and_log(in_s, reader_len, "Reading SCARD_CONNECT(2)"))
-    {
-        return send_connect_return(scard_client, XSCARD_F_INTERNAL_ERROR, 0, 0);
-    }
-
-    // Add the terminator to the string for the call
-    unsigned int call_data_size =
-        offsetof(struct connect_call, szReader) +
-        (reader_len + 1) * sizeof(call_data->szReader[0]);
-
-    call_data = (struct connect_call *)malloc(call_data_size);
-    if (call_data == NULL)
-    {
-        return send_connect_return(scard_client, XSCARD_E_NO_MEMORY, 0, 0);
-    }
-
-    //LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_connect: rs.reader_name %s dwShareMode 0x%8.8x "
-    //          "dwPreferredProtocols 0x%8.8x", rs.reader_name, rs.dwShareMode,
-    //          rs.dwPreferredProtocols);
-
-    call_data->callback = send_connect_return;
-    call_data->app_context = hContext;
-    call_data->dwShareMode = dwShareMode;
-    call_data->dwPreferredProtocols = dwPreferredProtocols;
-    in_uint8a(in_s, call_data->szReader, reader_len);
-    call_data->szReader[reader_len] = '\0';
-
-    scard_send_connect(scard_client, call_data);
-    return 0;
 }
 
 /*****************************************************************************/
@@ -1370,8 +1376,7 @@ scard_process_msg(struct trans *con, struct stream *in_s, int command)
             break;
         case SCARD_RELEASE_CONTEXT:
             LOG_DEVEL(LOG_LEVEL_INFO, "scard_process_msg: SCARD_RELEASE_CONTEXT");
-            rv = scard_process_common_context_long_return(
-                     con, in_s, CCLR_RELEASE_CONTEXT);
+            rv = scard_process_release_context(con, in_s);
             break;
 
         case SCARD_LIST_READERS:

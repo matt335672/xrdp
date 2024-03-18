@@ -99,6 +99,30 @@ struct scard_client;
 struct stream;
 
 /*****************************************************************************/
+/* Callback types */
+typedef int (*establish_context_cb_t)(struct scard_client *,
+                                      intptr_t closure,
+                                      unsigned int ReturnCode,
+                                      unsigned int app_context);
+
+typedef int (*release_context_cb_t)(struct scard_client *,
+                                    intptr_t closure,
+                                    unsigned int ReturnCode);
+
+typedef int (*list_readers_cb_t)(struct scard_client *client,
+                                 intptr_t closure,
+                                 unsigned int ReturnCode,
+                                 unsigned int cBytes,
+                                 const char *msz);
+
+typedef int (*connect_cb_t)(struct scard_client *client,
+                            intptr_t closure,
+                            unsigned int ReturnCode,
+                            unsigned int hCard,
+                            unsigned int dwActiveProtocol);
+
+
+/*****************************************************************************/
 /* Structures used to hold call state while waiting for the
  * client to respond */
 
@@ -121,31 +145,10 @@ struct common_call_private
 };
 
 /**
- * Use this struct to make an establish context call
- *
- * Fill in all fields (apart from p) and pass to
- * scard_send_establish_context(). The result will be received via the
- * callback, provided the client is still active.
- */
-struct establish_context_call
-{
-    struct common_call_private p;
-
-    /** How to pass the result back to the client */
-    int (*callback)(struct scard_client *client,
-                    unsigned int ReturnCode,
-                    unsigned int app_context);
-
-    /* See 2.2.2.1 */
-    unsigned int dwScope;
-};
-
-/**
  * Code used to make a common_context_long_return call
  */
 enum common_context_code
 {
-    CCLR_RELEASE_CONTEXT,
     CCLR_IS_VALID_CONTEXT,
     CCLR_CANCEL
 };
@@ -171,61 +174,6 @@ struct common_context_long_return_call
     /* See 2.2.2.2 */
     unsigned int app_context;
     enum common_context_code code;
-};
-
-/**
- * Use this struct to make a list readers call
- *
- * Fill in all fields (apart from p) and pass to
- * scard_send_list_readers(). The result will be received via the
- * callback, provided the client is still active.
- */
-struct list_readers_call
-{
-    struct common_call_private p;
-
-    /** How to pass the result back to the client */
-    int (*callback)(struct scard_client *client,
-                    unsigned int ReturnCode,
-                    unsigned int cBytes,
-                    const char *msz);
-
-    /* See 2.2.2.4 */
-    unsigned int app_context;
-    unsigned int cBytes;
-#ifdef __cplusplus
-    char mszGroups[1];
-#else
-    char mszGroups[];
-#endif
-};
-
-/**
- * Use this struct to make a connect call
- *
- * Fill in all fields (apart from p) and pass to
- * scard_send_connect(). The result will be received via the
- * callback, provided the client is still active.
- */
-struct connect_call
-{
-    struct common_call_private p;
-
-    /** How to pass the result back to the client */
-    int (*callback)(struct scard_client *client,
-                    unsigned int ReturnCode,
-                    unsigned int hCard,
-                    unsigned int dwActiveProtocol);
-
-    /* See 2.2.1.3 + 2.2.2.14 */
-    unsigned int app_context;
-    unsigned int dwShareMode;
-    unsigned int dwPreferredProtocols;
-#ifdef __cplusplus
-    char szReader[1];
-#else
-    char szReader[];
-#endif
 };
 
 /**
@@ -413,16 +361,68 @@ scard_client_get_cb_data(struct scard_client *client, unsigned char key);
  * Sends an establish_context call to the RDP client
  *
  * @param client client
- * @param call_data Info about the call
- *
- * The call_data must be on the heap. After this call,
- * ownership of the call_data is taken away from the caller.
+ * @param callback How to be notified of the result
+ * @param closure Additional state info for the caller
+ * @param dwScope call parameter
  */
 void
 scard_send_establish_context(struct scard_client *client,
-                             struct establish_context_call *call_data);
+                             establish_context_cb_t callback,
+                             intptr_t closure,
+                             unsigned int dwScope);
+
 /**
- * Sends a release_context / is valid context / cancel call to the RDP client
+ * Sends a release_context call to the RDP client
+ *
+ * @param client client
+ * @param callback How to be notified of the result
+ * @param closure Additional state info for the caller
+ * @param dwScope call parameter
+ */
+void
+scard_send_release_context(struct scard_client *client,
+                           release_context_cb_t callback,
+                           intptr_t closure,
+                           unsigned int app_context);
+
+/**
+ * Sends a list_readers call to the RDP client
+ *
+ * @param client client
+ * @param callback How to be notified of the result
+ * @param closure Additional state info for the caller
+ * @param app_context call parameter
+ * @param cBytes call parameter
+ * @param mszGroups call parameter
+ */
+void
+scard_send_list_readers(struct scard_client *client,
+                        list_readers_cb_t callback,
+                        intptr_t closure,
+                        unsigned int app_context,
+                        unsigned int cBytes,
+                        const char *mszGroups);
+
+/**
+ * Sends a connect call to the RDP client
+ *
+ * @param client client
+ * @param callback How to be notified of the result
+ * @param closure Additional state info for the caller
+ * @param app_context call parameter
+ * @param cBytes call parameter
+ * @param mszGroups call parameter
+ */
+void
+scard_send_connect(struct scard_client *client,
+                   connect_cb_t callback,
+                   intptr_t closure,
+                   unsigned int app_context,
+                   unsigned int dwShareMode,
+                   unsigned int dwPreferredProtocols,
+                   char szReader[]);
+/**
+ * Sends a is valid context / cancel call to the RDP client
  *
  * @param client client
  * @param call_data Info about the call
@@ -435,36 +435,10 @@ scard_send_common_context_long_return(
     struct scard_client *client,
     struct common_context_long_return_call *call_data);
 
-/**
- * Sends a list_readers call to the RDP client
- *
- * @param client client
- * @param call_data Info about the call
- *
- * The call_data must be on the heap. After this call,
- * ownership of the call_data is taken away from the caller.
- */
-void
-scard_send_list_readers(struct scard_client *client,
-                        struct list_readers_call *call_data);
-
 int  scard_send_get_status_change(void *user_data,
                                   char *context, int context_bytes,
                                   int wide, tui32 timeout,
                                   tui32 num_readers, READER_STATE *rsa);
-
-/**
- * Sends a connect call to the RDP client
- *
- * @param client client
- * @param call_data Info about the call
- *
- * The call_data must be on the heap. After this call,
- * ownership of the call_data is taken away from the caller.
- */
-void
-scard_send_connect(struct scard_client *client,
-                   struct connect_call *call_data);
 
 /**
  * Sends a reconnect call to the RDP client
