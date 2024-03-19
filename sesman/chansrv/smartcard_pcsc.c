@@ -622,6 +622,7 @@ count_multistring_elements(const char *str, unsigned int len)
 /*****************************************************************************/
 static int
 send_reconnect_return(struct scard_client *client,
+                      intptr_t closure,
                       unsigned int ReturnCode,
                       unsigned int dwActiveProtocol)
 {
@@ -649,9 +650,9 @@ send_reconnect_return(struct scard_client *client,
 int
 scard_process_reconnect(struct trans *con, struct stream *in_s)
 {
+    int rv = 0;
     struct pcsc_uds_client *uds_client;
     struct scard_client *scard_client;
-    struct reconnect_call *call_data;
 
     unsigned int hCard;
     unsigned int dwShareMode;
@@ -664,33 +665,28 @@ scard_process_reconnect(struct trans *con, struct stream *in_s)
 
     if (!s_check_rem_and_log(in_s, 4 + 4 + 4 + 4, "Reading SCARD_RECONNECT"))
     {
-        return send_reconnect_return(scard_client, XSCARD_F_INTERNAL_ERROR, 0);
+        send_reconnect_return(scard_client, 0, XSCARD_F_INTERNAL_ERROR, 0);
+        rv = 1;
     }
-
-    in_uint32_le(in_s, hCard);
-    in_uint32_le(in_s, dwShareMode);
-    in_uint32_le(in_s, dwPreferredProtocols);
-    in_uint32_le(in_s, dwInitialization);
-
-    call_data = (struct reconnect_call *)malloc(sizeof * call_data);
-    if (call_data == NULL)
+    else
     {
-        return send_reconnect_return(scard_client, XSCARD_E_NO_MEMORY, 0);
+        in_uint32_le(in_s, hCard);
+        in_uint32_le(in_s, dwShareMode);
+        in_uint32_le(in_s, dwPreferredProtocols);
+        in_uint32_le(in_s, dwInitialization);
+
+        scard_send_reconnect(scard_client, send_reconnect_return, 0, hCard,
+                             dwShareMode, dwPreferredProtocols,
+                             dwInitialization);
     }
-
-    call_data->callback = send_reconnect_return;
-    call_data->app_hcard = hCard;
-    call_data->dwShareMode = dwShareMode;
-    call_data->dwPreferredProtocols = dwPreferredProtocols;
-    call_data->dwInitialization = dwInitialization;
-
-    scard_send_reconnect(scard_client, call_data);
-    return 0;
+    return rv;
 }
 
 /*****************************************************************************/
 static int
-send_disconnect_return(struct scard_client *client, unsigned int ReturnCode)
+send_disconnect_return(struct scard_client *client,
+                       intptr_t closure,
+                       unsigned int ReturnCode)
 {
     return send_long_return(client, SCARD_DISCONNECT, ReturnCode);
 }
@@ -700,9 +696,12 @@ send_disconnect_return(struct scard_client *client, unsigned int ReturnCode)
 int
 scard_process_disconnect(struct trans *con, struct stream *in_s)
 {
+    int rv = 0;
     struct pcsc_uds_client *uds_client;
     struct scard_client *scard_client;
-    struct hcard_and_disposition_call *call_data;
+
+    unsigned int hCard;
+    unsigned int dwDisposition;
 
     LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_disconnect:");
     uds_client = (struct pcsc_uds_client *) (con->callback_data);
@@ -710,29 +709,25 @@ scard_process_disconnect(struct trans *con, struct stream *in_s)
 
     if (!s_check_rem_and_log(in_s, 8, "Reading SCARD_DISCONNECT"))
     {
-        return send_disconnect_return(scard_client, XSCARD_F_INTERNAL_ERROR);
+        send_disconnect_return(scard_client, 0, XSCARD_F_INTERNAL_ERROR);
+        rv = 1;
     }
-
-    /* Allocate a block to describe the call */
-    if ((call_data = g_new0(struct hcard_and_disposition_call, 1)) == NULL)
+    else
     {
-        return send_disconnect_return(scard_client, XSCARD_E_NO_MEMORY);
+        in_uint32_le(in_s, hCard);
+        in_uint32_le(in_s, dwDisposition);
+
+        scard_send_disconnect(scard_client, send_disconnect_return, 0,
+                              hCard, dwDisposition);
     }
 
-    call_data->callback = send_disconnect_return;
-    in_uint32_le(in_s, call_data->app_hcard);
-    in_uint32_le(in_s, call_data->dwDisposition);
-    LOG_DEVEL(LOG_LEVEL_DEBUG,
-              "scard_process_disconnect: hCard 0x%8.8x dwDisposition 0x%8.8x",
-              call_data->app_hcard, call_data->dwDisposition);
-
-    scard_send_disconnect(scard_client, call_data);
-    return 0;
+    return rv;
 }
 
 /*****************************************************************************/
 static int
 send_begin_transaction_return(struct scard_client *client,
+                              intptr_t closure,
                               unsigned int ReturnCode)
 {
     return send_long_return(client, SCARD_BEGIN_TRANSACTION, ReturnCode);
@@ -743,39 +738,33 @@ send_begin_transaction_return(struct scard_client *client,
 int
 scard_process_begin_transaction(struct trans *con, struct stream *in_s)
 {
+    int rv = 0;
     struct pcsc_uds_client *uds_client;
     struct scard_client *scard_client;
-    struct hcard_and_disposition_call *call_data;
 
+    unsigned int hCard;
     LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_begin_transaction:");
     uds_client = (struct pcsc_uds_client *) (con->callback_data);
     scard_client = uds_client->scard_client;
 
     if (!s_check_rem_and_log(in_s, 4, "Reading SCARD_BEGIN_TRANSACTION"))
     {
-        return send_begin_transaction_return(scard_client,
-                                             XSCARD_F_INTERNAL_ERROR);
+        send_begin_transaction_return(scard_client, 0, XSCARD_F_INTERNAL_ERROR);
+        rv = 1;
     }
-
-    /* Allocate a block to describe the call */
-    if ((call_data = g_new0(struct hcard_and_disposition_call, 1)) == NULL)
+    else
     {
-        return send_begin_transaction_return(scard_client, XSCARD_E_NO_MEMORY);
+        in_uint32_le(in_s, hCard);
+        scard_send_begin_transaction(scard_client,
+                                     send_begin_transaction_return, 0, hCard);
     }
-
-    call_data->callback = send_begin_transaction_return;
-    in_uint32_le(in_s, call_data->app_hcard);
-    LOG_DEVEL(LOG_LEVEL_DEBUG,
-              "scard_process_begin_transaction: hCard 0x%8.8x",
-              call_data->app_hcard);
-
-    scard_send_begin_transaction(scard_client, call_data);
-    return 0;
+    return rv;
 }
 
 /*****************************************************************************/
 static int
 send_end_transaction_return(struct scard_client *client,
+                            intptr_t closure,
                             unsigned int ReturnCode)
 {
     return send_long_return(client, SCARD_END_TRANSACTION, ReturnCode);
@@ -786,9 +775,12 @@ send_end_transaction_return(struct scard_client *client,
 int
 scard_process_end_transaction(struct trans *con, struct stream *in_s)
 {
+    int rv = 0;
     struct pcsc_uds_client *uds_client;
     struct scard_client *scard_client;
-    struct hcard_and_disposition_call *call_data;
+
+    unsigned int hCard;
+    unsigned int dwDisposition;
 
     LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_end_transaction:");
     uds_client = (struct pcsc_uds_client *) (con->callback_data);
@@ -796,26 +788,19 @@ scard_process_end_transaction(struct trans *con, struct stream *in_s)
 
     if (!s_check_rem_and_log(in_s, 8, "Reading SCARD_END_TRANSACTION"))
     {
-        return send_end_transaction_return(scard_client,
-                                           XSCARD_F_INTERNAL_ERROR);
+        send_end_transaction_return(scard_client, 0, XSCARD_F_INTERNAL_ERROR);
+        rv = 1;
     }
-
-    /* Allocate a block to describe the call */
-    if ((call_data = g_new0(struct hcard_and_disposition_call, 1)) == NULL)
+    else
     {
-        return send_end_transaction_return(scard_client, XSCARD_E_NO_MEMORY);
+        in_uint32_le(in_s, hCard);
+        in_uint32_le(in_s, dwDisposition);
+
+        scard_send_end_transaction(scard_client, send_disconnect_return, 0,
+                                   hCard, dwDisposition);
     }
 
-    call_data->callback = send_end_transaction_return;
-    in_uint32_le(in_s, call_data->app_hcard);
-    in_uint32_le(in_s, call_data->dwDisposition);
-    LOG_DEVEL(LOG_LEVEL_DEBUG,
-              "scard_process_end_transaction: "
-              "hCard 0x%8.8x dwDisposition 0x%8.8x",
-              call_data->app_hcard, call_data->dwDisposition);
-
-    scard_send_end_transaction(scard_client, call_data);
-    return 0;
+    return rv;
 }
 
 /*****************************************************************************/

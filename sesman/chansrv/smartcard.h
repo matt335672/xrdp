@@ -105,9 +105,15 @@ typedef int (*establish_context_cb_t)(struct scard_client *,
                                       unsigned int ReturnCode,
                                       unsigned int app_context);
 
-typedef int (*release_context_cb_t)(struct scard_client *,
-                                    intptr_t closure,
-                                    unsigned int ReturnCode);
+/**
+ * Generic Long_Return callback ([MS-RDPESC] 2.2.3.3)
+ *
+ * Used for release_context / cancel / disconnect /
+ * begin_transaction / end_transaction / set attrib
+ */
+typedef int (*long_return_cb_t)(struct scard_client *,
+                                intptr_t closure,
+                                unsigned int ReturnCode);
 
 typedef int (*list_readers_cb_t)(struct scard_client *client,
                                  intptr_t closure,
@@ -121,6 +127,10 @@ typedef int (*connect_cb_t)(struct scard_client *client,
                             unsigned int hCard,
                             unsigned int dwActiveProtocol);
 
+typedef int (*reconnect_cb_t)(struct scard_client *client,
+                              intptr_t closure,
+                              unsigned int ReturnCode,
+                              unsigned int dwActiveProtocol);
 
 /*****************************************************************************/
 /* Structures used to hold call state while waiting for the
@@ -155,7 +165,7 @@ enum common_context_code
 
 /**
  * Use this struct to make any one of these calls which
- * share the same parameters and result:-
+ * share the same parameter/ and result:-
  * 1) release context
  * 2) is valid context
  * 3) cancel
@@ -174,29 +184,6 @@ struct common_context_long_return_call
     /* See 2.2.2.2 */
     unsigned int app_context;
     enum common_context_code code;
-};
-
-/**
- * Use this struct to make a reconnect call
- *
- * Fill in all fields (apart from p) and pass to
- * scard_send_reconnect(). The result will be received via the
- * callback, provided the client is still active.
- */
-struct reconnect_call
-{
-    struct common_call_private p;
-
-    /** How to pass the result back to the client */
-    int (*callback)(struct scard_client *client,
-                    unsigned int ReturnCode,
-                    unsigned int dwActiveProtocol);
-
-    /* See 2.2.2.15 */
-    unsigned int app_hcard;
-    unsigned int dwShareMode;
-    unsigned int dwPreferredProtocols;
-    unsigned int dwInitialization;
 };
 
 /**
@@ -223,27 +210,6 @@ struct status_call
     /* See 2.2.2.18 */
     unsigned int app_hcard;
 };
-
-/**
- * Use this struct to make a disconnect/begin transaction/end transaction call
- *
- * Fill in all fields (apart from p) and pass to
- * scard_send_xxx(). The result will be received via the
- * callback, provided the client is still active.
- */
-struct hcard_and_disposition_call
-{
-    struct common_call_private p;
-
-    /** How to pass the result back to the client */
-    int (*callback)(struct scard_client *client,
-                    unsigned int ReturnCode);
-
-    /* See 2.2.2.16 */
-    unsigned int app_hcard;
-    unsigned int dwDisposition; // Ignored on BeginTransaction
-};
-
 
 /**
  * Use this struct to make a transmit call
@@ -358,7 +324,7 @@ void *
 scard_client_get_cb_data(struct scard_client *client, unsigned char key);
 
 /**
- * Sends an establish_context call to the RDP client
+ * Sends an establish_context call to the RDP client ([MS-RDPESC] 2.2.2.1)
  *
  * @param client client
  * @param callback How to be notified of the result
@@ -372,7 +338,7 @@ scard_send_establish_context(struct scard_client *client,
                              unsigned int dwScope);
 
 /**
- * Sends a release_context call to the RDP client
+ * Sends a release_context call to the RDP client ([MS-RDPESC] 2.2.2.2)
  *
  * @param client client
  * @param callback How to be notified of the result
@@ -381,12 +347,12 @@ scard_send_establish_context(struct scard_client *client,
  */
 void
 scard_send_release_context(struct scard_client *client,
-                           release_context_cb_t callback,
+                           long_return_cb_t callback,
                            intptr_t closure,
                            unsigned int app_context);
 
 /**
- * Sends a list_readers call to the RDP client
+ * Sends a list_readers call to the RDP client ([MS-RDPESC] 2.2.2.4)
  *
  * @param client client
  * @param callback How to be notified of the result
@@ -404,7 +370,7 @@ scard_send_list_readers(struct scard_client *client,
                         const char *mszGroups);
 
 /**
- * Sends a connect call to the RDP client
+ * Sends a connect call to the RDP client ([MS-RDPESC] 2.2.2.14)
  *
  * @param client client
  * @param callback How to be notified of the result
@@ -421,6 +387,73 @@ scard_send_connect(struct scard_client *client,
                    unsigned int dwShareMode,
                    unsigned int dwPreferredProtocols,
                    char szReader[]);
+
+/**
+ * Sends a reconnect call to the RDP client ([MS-RDPESC] 2.2.2.15)
+ *
+ * @param client client
+ * @param callback How to be notified of the result
+ * @param closure Additional state info for the caller
+ * @param app_hcard call parameter
+ * @param dwShareMode call parameter
+ * @param dwPreferredProtocols call parameter
+ * @param dwInitialization call parameter
+ */
+void
+scard_send_reconnect(struct scard_client *client,
+                     reconnect_cb_t callback,
+                     intptr_t closure,
+                     unsigned int app_hcard,
+                     unsigned int dwShareMode,
+                     unsigned int dwPreferredProtocols,
+                     unsigned int dwInitialization);
+
+/**
+ * Sends a disconnect call to the RDP client ([MS-RDPESC] 2.2.2.16)
+ *
+ * @param client client
+ * @param callback How to be notified of the result
+ * @param closure Additional state info for the caller
+ * @param app_hcard call parameter
+ * @param dwDisposition call parameter
+ */
+void
+scard_send_disconnect(struct scard_client *client,
+                      long_return_cb_t callback,
+                      intptr_t closure,
+                      unsigned int app_hcard,
+                      unsigned int dwDisposition);
+
+/**
+ * Sends a begin transaction call to the RDP client ([MS-RDPESC] 2.2.2.16)
+ *
+ * @param client client
+ * @param callback How to be notified of the result
+ * @param closure Additional state info for the caller
+ * @param app_hcard call parameter
+ */
+void
+scard_send_begin_transaction(struct scard_client *client,
+                             long_return_cb_t callback,
+                             intptr_t closure,
+                             unsigned int app_hcard);
+
+/**
+ * Sends an end transaction call to the RDP client ([MS-RDPESC] 2.2.2.16)
+ *
+ * @param client client
+ * @param callback How to be notified of the result
+ * @param closure Additional state info for the caller
+ * @param app_hcard call parameter
+ * @param dwDisposition call parameter
+ */
+void
+scard_send_end_transaction(struct scard_client *client,
+                           long_return_cb_t callback,
+                           intptr_t closure,
+                           unsigned int app_hcard,
+                           unsigned int dwDisposition);
+
 /**
  * Sends a is valid context / cancel call to the RDP client
  *
@@ -441,45 +474,6 @@ int  scard_send_get_status_change(void *user_data,
                                   tui32 num_readers, READER_STATE *rsa);
 
 /**
- * Sends a reconnect call to the RDP client
- *
- * @param client client
- * @param call_data Info about the call
- *
- * The call_data must be on the heap. After this call,
- * ownership of the call_data is taken away from the caller.
- */
-void
-scard_send_reconnect(struct scard_client *client,
-                     struct reconnect_call *call_data);
-
-/**
- * Sends a begin transaction call to the RDP client
- *
- * @param client client
- * @param call_data Info about the call
- *
- * The call_data must be on the heap. After this call,
- * ownership of the call_data is taken away from the caller.
- */
-void
-scard_send_begin_transaction(struct scard_client *client,
-                             struct hcard_and_disposition_call *call_data);
-
-/**
- * Sends an end transaction call to the RDP client
- *
- * @param client client
- * @param call_data Info about the call
- *
- * The call_data must be on the heap. After this call,
- * ownership of the call_data is taken away from the caller.
- */
-void
-scard_send_end_transaction(struct scard_client *client,
-                           struct hcard_and_disposition_call *call_data);
-
-/**
  * Sends a status call to the RDP client
  *
  * @param client client
@@ -491,19 +485,6 @@ scard_send_end_transaction(struct scard_client *client,
 void
 scard_send_status(struct scard_client *client,
                   struct status_call *call_data);
-
-/**
- * Sends a disconnect call to the RDP client
- *
- * @param client client
- * @param call_data Info about the call
- *
- * The call_data must be on the heap. After this call,
- * ownership of the call_data is taken away from the caller.
- */
-void
-scard_send_disconnect(struct scard_client *client,
-                      struct hcard_and_disposition_call *call_data);
 
 
 /**
