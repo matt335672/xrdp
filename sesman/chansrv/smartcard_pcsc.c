@@ -437,9 +437,11 @@ scard_process_list_readers(struct trans *con, struct stream *in_s)
         }
         else
         {
+            char *mszGroups;
+            in_uint8p(in_s,  mszGroups, cBytes);
             scard_send_list_readers(scard_client,
                                     send_list_readers_return, 0,
-                                    hContext, cBytes, in_s->p);
+                                    hContext, cBytes, mszGroups);
         }
     }
     return rv;
@@ -511,9 +513,11 @@ scard_process_connect(struct trans *con, struct stream *in_s)
         }
         else
         {
+            char *szReader;
+            in_uint8p(in_s,  szReader, reader_len);
             scard_send_connect(scard_client, send_connect_return, 0,
                                hContext, dwShareMode,
-                               dwPreferredProtocols, in_s->p);
+                               dwPreferredProtocols, szReader);
         }
     }
     return rv;
@@ -804,18 +808,9 @@ scard_process_end_transaction(struct trans *con, struct stream *in_s)
 }
 
 /*****************************************************************************/
-/* returns error */
-int
-scard_function_get_attrib_return(void *user_data,
-                                 struct stream *in_s,
-                                 int len, int status)
-{
-    return 0;
-}
-
-/*****************************************************************************/
 static int
 send_transmit_return(struct scard_client *client,
+                     intptr_t closure,
                      unsigned int ReturnCode,
                      const struct scard_io_request *pioRecvPci,
                      unsigned int cbRecvLength,
@@ -877,24 +872,23 @@ send_transmit_return(struct scard_client *client,
 }
 
 /*****************************************************************************/
-/* returns error */
 int
 scard_process_transmit(struct trans *con, struct stream *in_s)
 {
     struct pcsc_uds_client *uds_client;
     struct scard_client *scard_client;
-    struct transmit_call *call_data;
 
     // Fixed fields provided by sender
     unsigned int hCard;
-    unsigned int ioSendPci_dwProtocol;
-    unsigned int ioSendPci_cbExtraBytes;
     unsigned int cbSendLength;
     unsigned int use_pioRecvPci;
-    unsigned int ioRecvPci_dwProtocol;
-    unsigned int ioRecvPci_cbExtraBytes;
     unsigned int fpbRecvBufferIsNULL;
     unsigned int cbRecvLength;
+
+    struct scard_io_request ioSendPci;
+    struct scard_io_request ioRecvPci;
+    struct scard_io_request *pioRecvPci = NULL;
+    const char *pbSendBuffer;
 
     LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_transmit:");
     uds_client = (struct pcsc_uds_client *) (con->callback_data);
@@ -902,97 +896,64 @@ scard_process_transmit(struct trans *con, struct stream *in_s)
 
     if (!s_check_rem_and_log(in_s, 9 * 4, "Reading SCARD_TRANSMIT(1)"))
     {
-        return send_transmit_return(scard_client,
+        return send_transmit_return(scard_client, 0,
                                     XSCARD_F_INTERNAL_ERROR, NULL, 0, NULL);
     }
 
     // Read all the fixed fields from the sender
     in_uint32_le(in_s, hCard);
-    in_uint32_le(in_s, ioSendPci_dwProtocol);
-    in_uint32_le(in_s, ioSendPci_cbExtraBytes);
+    in_uint32_le(in_s, ioSendPci.dwProtocol);
+    in_uint32_le(in_s, ioSendPci.cbExtraBytes);
     in_uint32_le(in_s, cbSendLength);
     in_uint32_le(in_s, use_pioRecvPci);
-    in_uint32_le(in_s, ioRecvPci_dwProtocol);
-    in_uint32_le(in_s, ioRecvPci_cbExtraBytes);
+    in_uint32_le(in_s, ioRecvPci.dwProtocol);
+    in_uint32_le(in_s, ioRecvPci.cbExtraBytes);
     in_uint32_le(in_s, fpbRecvBufferIsNULL);
     in_uint32_le(in_s, cbRecvLength);
 
-    // Clear potentially unused fields
-    if (use_pioRecvPci == 0)
-    {
-        ioRecvPci_dwProtocol = 0;
-        ioRecvPci_cbExtraBytes = 0;
-    }
-
-    // Check the rest of the data we need is present
-    unsigned int reqd_data = cbSendLength + ioSendPci_cbExtraBytes +
-                             ioRecvPci_cbExtraBytes;
-    if (!s_check_rem_and_log(in_s, reqd_data, "Reading SCARD_TRANSMIT(2)"))
-    {
-        return send_transmit_return(scard_client,
-                                    XSCARD_F_INTERNAL_ERROR, NULL, 0, NULL);
-    }
-
-    // Allocate memory
-    unsigned int alloc_size =
-        offsetof(struct transmit_call, pbSendBuffer) + cbSendLength;
-
-    if ((call_data = (struct transmit_call *)malloc(alloc_size)) == NULL)
-    {
-        return send_transmit_return(scard_client,
-                                    XSCARD_E_NO_MEMORY, NULL, 0, NULL);
-    }
-
-    call_data->pioSendPci = MALLOC_SCARD_IO_REQUEST(ioSendPci_cbExtraBytes);
-    if (call_data->pioSendPci == NULL)
-    {
-        free(call_data);
-        return send_transmit_return(scard_client,
-                                    XSCARD_E_NO_MEMORY, NULL, 0, NULL);
-    }
-
+    // Are we using the ioRecvPci?
     if (use_pioRecvPci)
     {
-        call_data->pioRecvPci = MALLOC_SCARD_IO_REQUEST(ioRecvPci_cbExtraBytes);
-        if (call_data->pioRecvPci == NULL)
-        {
-            free(call_data->pioSendPci);
-            free(call_data);
-            return send_transmit_return(scard_client,
-                                        XSCARD_E_NO_MEMORY, NULL, 0, NULL);
-        }
+        pioRecvPci = &ioRecvPci;
     }
     else
     {
-        call_data->pioRecvPci = NULL;
+        pioRecvPci = NULL;
+        ioRecvPci.dwProtocol = 0; // Ignore field
+        ioRecvPci.cbExtraBytes = 0; // Ignore field
     }
 
-    call_data->callback = send_transmit_return;
-
-    call_data->app_hcard = hCard;
-    call_data->pioSendPci->dwProtocol = ioSendPci_dwProtocol;
-    call_data->pioSendPci->cbExtraBytes = ioSendPci_cbExtraBytes;
-    call_data->cbSendLength = cbSendLength;
-    if (call_data->pioRecvPci != NULL)
+    // Check the rest of the data we need is present
+    unsigned int reqd_data = ioSendPci.cbExtraBytes +
+                             cbSendLength +
+                             ioRecvPci.cbExtraBytes;
+    if (!s_check_rem_and_log(in_s, reqd_data, "Reading SCARD_TRANSMIT(2)"))
     {
-        call_data->pioRecvPci->dwProtocol = ioRecvPci_dwProtocol;
-        call_data->pioRecvPci->cbExtraBytes = ioRecvPci_cbExtraBytes;
+        return send_transmit_return(scard_client, 0,
+                                    XSCARD_F_INTERNAL_ERROR, NULL, 0, NULL);
     }
-    call_data->retrieve_length_only = fpbRecvBufferIsNULL;
-    call_data->cbRecvLength = cbRecvLength;
-    in_uint8a(in_s, call_data->pioSendPci->pbExtraBytes,
-              call_data->pioSendPci->cbExtraBytes);
-    in_uint8a(in_s, call_data->pbSendBuffer, cbSendLength);
-    if (call_data->pioRecvPci != NULL)
-    {
-        in_uint8a(in_s, call_data->pioRecvPci->pbExtraBytes,
-                  call_data->pioRecvPci->cbExtraBytes);
-    }
+    in_uint8p(in_s,  ioSendPci.pbExtraBytes, ioSendPci.cbExtraBytes);
+    in_uint8p(in_s, pbSendBuffer, cbSendLength);
+    in_uint8p(in_s,  ioRecvPci.pbExtraBytes, ioRecvPci.cbExtraBytes);
 
-    scard_send_transmit(scard_client, call_data);
+    scard_send_transmit(scard_client, send_transmit_return, 0,
+                        hCard, &ioSendPci,
+                        cbSendLength, pbSendBuffer,
+                        pioRecvPci,
+                        fpbRecvBufferIsNULL,
+                        cbRecvLength);
     return 0;
 }
 
+/*****************************************************************************/
+/* returns error */
+int
+scard_function_get_attrib_return(void *user_data,
+                                 struct stream *in_s,
+                                 int len, int status)
+{
+    return 0;
+}
 /*****************************************************************************/
 /* returns error */
 int

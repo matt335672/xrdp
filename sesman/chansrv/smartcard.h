@@ -35,16 +35,8 @@ struct scard_io_request
 {
     unsigned int dwProtocol;
     unsigned int cbExtraBytes;
-#ifdef __cplusplus
-    char pbExtraBytes[1];
-#else
-    char pbExtraBytes[];
-#endif
+    char *pbExtraBytes;
 };
-
-#define MALLOC_SCARD_IO_REQUEST(extra_bytes) \
-    (struct scard_io_request *) \
-    malloc(offsetof(struct scard_io_request, pbExtraBytes) + (extra_bytes))
 
 typedef struct reader_state
 {
@@ -132,6 +124,12 @@ typedef int (*reconnect_cb_t)(struct scard_client *client,
                               unsigned int ReturnCode,
                               unsigned int dwActiveProtocol);
 
+typedef int (*transmit_cb_t)(struct scard_client *client,
+                             intptr_t closure,
+                             unsigned int ReturnCode,
+                             const struct scard_io_request *pioRecvPci,
+                             unsigned int cbRecvLength,
+                             const char *pbRecvBuffer);
 /*****************************************************************************/
 /* Structures used to hold call state while waiting for the
  * client to respond */
@@ -211,41 +209,6 @@ struct status_call
     unsigned int app_hcard;
 };
 
-/**
- * Use this struct to make a transmit call
- *
- * Fill in all fields (apart from p) and pass to
- * scard_send_transmit(). The result will be received via the
- * callback, provided the client is still active.
- *
- * @pre The structure must be allocated on the heap.
- * @pre ioSendPci must be specified and separately allocatd on the heap
- * @pre if pioRecvPci is used it must be allocated on the heap
- */
-struct transmit_call
-{
-    struct common_call_private p;
-
-    /** How to pass the result back to the client (2.2.3.11) */
-    int (*callback)(struct scard_client *client,
-                    unsigned int ReturnCode,
-                    const struct scard_io_request *pioRecvPci,
-                    unsigned int cbRecvLength,
-                    const char *pbRecvBuffer);
-
-    /* See 2.2.2.16 */
-    unsigned int app_hcard;
-    struct scard_io_request *pioSendPci;
-    unsigned int cbSendLength;
-    struct scard_io_request *pioRecvPci;
-    int retrieve_length_only;
-    unsigned int cbRecvLength;
-#ifdef __cplusplus
-    char pbSendBuffer[1];
-#else
-    char pbSendBuffer[];
-#endif
-};
 /**
  * Use this struct to make a control call
  *
@@ -455,6 +418,32 @@ scard_send_end_transaction(struct scard_client *client,
                            unsigned int dwDisposition);
 
 /**
+ * Sends a transmit call to the RDP client ([MS-RDPESC] 2.2.2.19)
+ *
+ * @param client client
+ * @param callback How to be notified of the result
+ * @param closure Additional state info for the caller
+ * @param app_hcard call parameter
+ * @param pioSendPci call parameter (cannot be NULL)
+ * @param cbSendLength call parameter
+ * @param pbSendBuffer call parameter
+ * @param pioRecvPci call parameter
+ * @param fpbRecvBufferIsNULL call parameter
+ * @param cbRecvLength call parameter
+ */
+void
+scard_send_transmit(struct scard_client *client,
+                    transmit_cb_t callback,
+                    intptr_t closure,
+                    unsigned int app_hcard,
+                    const struct scard_io_request *pioSendPci,
+                    unsigned int cbSendLength,
+                    const char *pbSendBuffer,
+                    struct scard_io_request *pioRecvPci,
+                    int fpbRecvBufferIsNULL,
+                    unsigned int cbRecvLength);
+
+/**
  * Sends a is valid context / cancel call to the RDP client
  *
  * @param client client
@@ -486,20 +475,6 @@ void
 scard_send_status(struct scard_client *client,
                   struct status_call *call_data);
 
-
-/**
- * Sends a transmit call to the RDP client
- *
- * @param client client
- * @param call_data Info about the call
- *
- * The call_data (and members pioSendPci and pioRecvPci if used) must
- * be on the heap. After this call, ownership of the call_data is taken
- * away from the caller.
- */
-void
-scard_send_transmit(struct scard_client *client,
-                    struct transmit_call *call_data);
 
 /**
  * Sends a control call to the RDP client

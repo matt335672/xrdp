@@ -126,6 +126,22 @@ enum pcsc_message_code
 // 16     dwActiveProtocol
 //
 // *****************************************************************************
+//  R E C O N N E C T
+// *****************************************************************************
+// Request (See [MS-RDPESC] 2.2.2.15)
+// 0      Header, code SCARD_RECONNECT
+// 8      hCard
+// 12     dwShareMode
+// 16     dwPreferredProtocols
+// 20     dwInitialization
+//
+// Response (See [MS-RDPESC] 2.2.3.7) :-
+// Offset Value
+// 0      Header, code SCARD_RECONNECT
+// 8      ReturnCode
+// 12     dwActiveProtocol
+//
+// *****************************************************************************
 //  D I S C O N N E C T
 // *****************************************************************************
 // Request (See [MS-RDPESC] 2.2.2.16) :-
@@ -138,25 +154,6 @@ enum pcsc_message_code
 // Offset Value
 // 0      Header, code SCARD_DISCONNECT
 // 8      ReturnCode
-//
-// *****************************************************************************
-//  S T A T U S
-// *****************************************************************************
-// Request (See [MS-RDPESC] 2.2.2.18) :-
-// Offset Value
-// 0      Header, code SCARD_STATUS
-// 8      hCard
-//
-// Response (See [MS-RDPESC] 2.2.3.10) :-
-// Offset Value
-// 0      Header, code SCARD_STATUS
-// 8      ReturnCode
-// 12     dwState (MS-style - not a PCSCLite bitmask)
-// 16     dwProtocol
-// 20     cBytes
-// 24     cbAtrLen
-// 28     Friendly name of reader (UTF-8)
-// 28+cBytes cbAtr
 //
 // *****************************************************************************
 //  B E G I N   T R A N S A C T I O N
@@ -217,19 +214,6 @@ enum pcsc_message_code
 // ??     pioRecvPci.pbExtraBytes
 //
 // *****************************************************************************
-//  C A N C E L
-// *****************************************************************************
-// Request (See [MS-RDPESC] 2.2.2.2) :-
-// Offset Value
-// 0      Header, code SCARD_CANCEL
-// 8      hCard
-//
-// Response (See [MS-RDPESC] 2.2.3.3) :-
-// Offset Value
-// 0      Header, code SCARD_CANCEL
-// 8      ReturnCode
-//
-// *****************************************************************************
 //  C O N T R O L
 // *****************************************************************************
 // Request (See [MS-RDPESC] 2.2.2.20) :-
@@ -249,21 +233,36 @@ enum pcsc_message_code
 // 16     *pvOutBuffer (only if ReturnCode == SCARD_S_SUCCESS)
 //
 // *****************************************************************************
-//  R E C O N N E C T
+//  S T A T U S
 // *****************************************************************************
-// Request (See [MS-RDPESC] 2.2.2.15)
-// 0      Header, code SCARD_RECONNECT
-// 8      hCard
-// 12     dwShareMode
-// 16     dwPreferredProtocols
-// 20     dwInitialization
-//
-// Response (See [MS-RDPESC] 2.2.3.7) :-
+// Request (See [MS-RDPESC] 2.2.2.18) :-
 // Offset Value
-// 0      Header, code SCARD_RECONNECT
+// 0      Header, code SCARD_STATUS
+// 8      hCard
+//
+// Response (See [MS-RDPESC] 2.2.3.10) :-
+// Offset Value
+// 0      Header, code SCARD_STATUS
 // 8      ReturnCode
-// 12     dwActiveProtocol
-
+// 12     dwState (MS-style - not a PCSCLite bitmask)
+// 16     dwProtocol
+// 20     cBytes
+// 24     cbAtrLen
+// 28     Friendly name of reader (UTF-8)
+// 28+cBytes cbAtr
+//
+// *****************************************************************************
+//  C A N C E L
+// *****************************************************************************
+// Request (See [MS-RDPESC] 2.2.2.2) :-
+// Offset Value
+// 0      Header, code SCARD_CANCEL
+// 8      hCard
+//
+// Response (See [MS-RDPESC] 2.2.3.3) :-
+// Offset Value
+// 0      Header, code SCARD_CANCEL
+// 8      ReturnCode
 //
 
 #endif // XRDP_PCSC_H
