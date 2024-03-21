@@ -137,6 +137,16 @@ typedef int (*control_cb_t)(struct scard_client *client,
                             unsigned int cbOutBufferSize,
                             const char *pbOutBuffer);
 
+typedef int (*status_cb_t)(struct scard_client *client,
+                           intptr_t closure,
+                           unsigned int ReturnCode,
+                           unsigned int dwState, // PCSC-Lite compatible
+                           unsigned int dwProtocol, // PCSC-Lite Compatible
+                           unsigned int cBytes,
+                           const char *mszReaderNames,
+                           unsigned int cbAtrLen,
+                           const char *pbAtr);
+
 
 /*****************************************************************************/
 /* Structures used to hold call state while waiting for the
@@ -191,32 +201,6 @@ struct common_context_long_return_call
     unsigned int app_context;
     enum common_context_code code;
 };
-
-/**
- * Use this struct to make a status call
- *
- * Fill in all fields (apart from p) and pass to
- * scard_send_status(). The result will be received via the
- * callback, provided the client is still active.
- */
-struct status_call
-{
-    struct common_call_private p;
-
-    /** How to pass the result back to the client */
-    int (*callback)(struct scard_client *client,
-                    unsigned int ReturnCode,
-                    unsigned int dwState,
-                    unsigned int dwProtocol,
-                    unsigned int cBytes,
-                    const char *mszReaderNames,
-                    unsigned int cbAtrLen,
-                    const char *pbAtr);
-
-    /* See 2.2.2.18 */
-    unsigned int app_hcard;
-};
-
 
 void scard_device_announce(tui32 device_id);
 int  scard_get_wait_objs(tbus *objs, int *count, int *timeout);
@@ -429,7 +413,7 @@ scard_send_transmit(struct scard_client *client,
  * @param callback How to be notified of the result
  * @param closure Additional state info for the caller
  * @param app_hcard call parameter
- * @param dwControlCode call parameter
+ * @param dwControlCode call parameter (PCSC-Lite compatible)
  * @param cbInBufferSize call parameter
  * @param pvInBuffer call parameter
  * @param fpvOutBufferIsNULL call parameter
@@ -449,6 +433,23 @@ scard_send_control(struct scard_client *client,
                    unsigned int cbOutBufferSize);
 
 /**
+ * Sends a status call to the RDP client ([MS-RDPESC] 2.2.2.18)
+ *
+ * @param client client
+ * @param callback How to be notified of the result
+ * @param closure Additional state info for the caller
+ * @param app_hcard call parameter
+ *
+ * The parameters fmszReaderNamesIsNULL, cchReaderLen and cbAtrLen
+ * specified in the IDL are unsupported.
+ */
+void
+scard_send_status(struct scard_client *client,
+                  status_cb_t callback,
+                  intptr_t closure,
+                  unsigned int app_hcard);
+
+/**
  * Sends a is valid context / cancel call to the RDP client
  *
  * @param client client
@@ -466,19 +467,6 @@ int  scard_send_get_status_change(void *user_data,
                                   char *context, int context_bytes,
                                   int wide, tui32 timeout,
                                   tui32 num_readers, READER_STATE *rsa);
-
-/**
- * Sends a status call to the RDP client
- *
- * @param client client
- * @param call_data Info about the call
- *
- * The call_data must be on the heap. After this call,
- * ownership of the call_data is taken away from the caller.
- */
-void
-scard_send_status(struct scard_client *client,
-                  struct status_call *call_data);
 
 
 int  scard_send_get_attrib(void *user_data, char *card, int card_bytes,

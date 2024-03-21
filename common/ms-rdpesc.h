@@ -30,6 +30,10 @@
 #define SCARD_RESET_CARD            0x00000001 /* reset smart card        */
 #define SCARD_UNPOWER_CARD          0x00000002 /* turn off and reset card */
 
+/* see [MS-RDPESC] 2.2.4 Card/Reeader State */
+#define SCARD_UNKNOWN               0x00000000
+#define SCARD_SPECIFICMODE          0x00000006
+
 /* see [MS-RDPESC] 2.2.5 protocol identifier - Table A */
 #define SCARD_PROTOCOL_UNDEFINED    0x00000000
 #define SCARD_PROTOCOL_T0           0x00000001

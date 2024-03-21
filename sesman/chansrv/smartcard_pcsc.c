@@ -1046,25 +1046,9 @@ scard_process_control(struct trans *con, struct stream *in_s)
 }
 
 /*****************************************************************************/
-struct pcsc_status
-{
-    int uds_client_id;
-    int cchReaderLen;
-};
-
-
-/*****************************************************************************/
-/* returns error */
-int
-scard_function_get_attrib_return(void *user_data,
-                                 struct stream *in_s,
-                                 int len, int status)
-{
-    return 0;
-}
-/*****************************************************************************/
 static int
 send_status_return(struct scard_client *client,
+                   intptr_t closure,
                    unsigned int ReturnCode,
                    unsigned int dwState,
                    unsigned int dwProtocol,
@@ -1110,14 +1094,16 @@ send_status_return(struct scard_client *client,
     out_uint32_le(out_s, SCARD_STATUS);
     return trans_force_write(con);
 }
+
 /*****************************************************************************/
 /* returns error */
 int
 scard_process_status(struct trans *con, struct stream *in_s)
 {
+    int rv = 0;
+
     struct pcsc_uds_client *uds_client;
     struct scard_client *scard_client;
-    struct status_call *call_data;
 
     LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_status:");
     uds_client = (struct pcsc_uds_client *) (con->callback_data);
@@ -1125,23 +1111,28 @@ scard_process_status(struct trans *con, struct stream *in_s)
 
     if (!s_check_rem_and_log(in_s, 4, "Reading SCARD_STATUS"))
     {
-        return send_status_return(scard_client,
-                                  XSCARD_F_INTERNAL_ERROR,
-                                  0, 0, 0, NULL, 0, NULL);
+        send_status_return(scard_client, 0,
+                           XSCARD_F_INTERNAL_ERROR,
+                           0, 0, 0, NULL, 0, NULL);
+        rv = 1;
     }
-
-    /* Allocate a block to describe the call */
-    if ((call_data = g_new0(struct status_call, 1)) == NULL)
+    else
     {
-        return send_status_return(scard_client,
-                                  XSCARD_E_NO_MEMORY,
-                                  0, 0, 0, NULL, 0, NULL);
+        unsigned int app_hcard;
+        in_uint32_le(in_s, app_hcard);
+
+        scard_send_status(scard_client, send_status_return, 0, app_hcard);
     }
 
-    call_data->callback = send_status_return;
-    in_uint32_le(in_s, call_data->app_hcard);
-
-    scard_send_status(scard_client, call_data);
+    return rv;
+}
+/*****************************************************************************/
+/* returns error */
+int
+scard_function_get_attrib_return(void *user_data,
+                                 struct stream *in_s,
+                                 int len, int status)
+{
     return 0;
 }
 
