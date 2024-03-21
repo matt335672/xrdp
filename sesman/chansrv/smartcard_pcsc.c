@@ -875,6 +875,7 @@ send_transmit_return(struct scard_client *client,
 int
 scard_process_transmit(struct trans *con, struct stream *in_s)
 {
+    int rv = 0;
     struct pcsc_uds_client *uds_client;
     struct scard_client *scard_client;
 
@@ -896,68 +897,67 @@ scard_process_transmit(struct trans *con, struct stream *in_s)
 
     if (!s_check_rem_and_log(in_s, 9 * 4, "Reading SCARD_TRANSMIT(1)"))
     {
-        return send_transmit_return(scard_client, 0,
-                                    XSCARD_F_INTERNAL_ERROR, NULL, 0, NULL);
-    }
-
-    // Read all the fixed fields from the sender
-    in_uint32_le(in_s, hCard);
-    in_uint32_le(in_s, ioSendPci.dwProtocol);
-    in_uint32_le(in_s, ioSendPci.cbExtraBytes);
-    in_uint32_le(in_s, cbSendLength);
-    in_uint32_le(in_s, use_pioRecvPci);
-    in_uint32_le(in_s, ioRecvPci.dwProtocol);
-    in_uint32_le(in_s, ioRecvPci.cbExtraBytes);
-    in_uint32_le(in_s, fpbRecvBufferIsNULL);
-    in_uint32_le(in_s, cbRecvLength);
-
-    // Are we using the ioRecvPci?
-    if (use_pioRecvPci)
-    {
-        pioRecvPci = &ioRecvPci;
+        send_transmit_return(scard_client, 0,
+                             XSCARD_F_INTERNAL_ERROR, NULL, 0, NULL);
+        rv = 1;
     }
     else
     {
-        pioRecvPci = NULL;
-        ioRecvPci.dwProtocol = 0; // Ignore field
-        ioRecvPci.cbExtraBytes = 0; // Ignore field
+        // Read all the fixed fields from the sender
+        in_uint32_le(in_s, hCard);
+        in_uint32_le(in_s, ioSendPci.dwProtocol);
+        in_uint32_le(in_s, ioSendPci.cbExtraBytes);
+        in_uint32_le(in_s, cbSendLength);
+        in_uint32_le(in_s, use_pioRecvPci);
+        in_uint32_le(in_s, ioRecvPci.dwProtocol);
+        in_uint32_le(in_s, ioRecvPci.cbExtraBytes);
+        in_uint32_le(in_s, fpbRecvBufferIsNULL);
+        in_uint32_le(in_s, cbRecvLength);
+
+        // Are we using the ioRecvPci?
+        if (use_pioRecvPci)
+        {
+            pioRecvPci = &ioRecvPci;
+        }
+        else
+        {
+            pioRecvPci = NULL;
+            ioRecvPci.dwProtocol = 0; // Ignore field
+            ioRecvPci.cbExtraBytes = 0; // Ignore field
+        }
+
+        // Check the rest of the data we need is present
+        unsigned int reqd_data = ioSendPci.cbExtraBytes +
+                                 cbSendLength +
+                                 ioRecvPci.cbExtraBytes;
+        if (!s_check_rem_and_log(in_s, reqd_data, "Reading SCARD_TRANSMIT(2)"))
+        {
+            send_transmit_return(scard_client, 0,
+                                 XSCARD_F_INTERNAL_ERROR, NULL, 0, NULL);
+            rv = 1;
+        }
+        else
+        {
+            in_uint8p(in_s,  ioSendPci.pbExtraBytes, ioSendPci.cbExtraBytes);
+            in_uint8p(in_s, pbSendBuffer, cbSendLength);
+            in_uint8p(in_s,  ioRecvPci.pbExtraBytes, ioRecvPci.cbExtraBytes);
+
+            scard_send_transmit(scard_client, send_transmit_return, 0,
+                                hCard, &ioSendPci,
+                                cbSendLength, pbSendBuffer,
+                                pioRecvPci,
+                                fpbRecvBufferIsNULL,
+                                cbRecvLength);
+        }
     }
 
-    // Check the rest of the data we need is present
-    unsigned int reqd_data = ioSendPci.cbExtraBytes +
-                             cbSendLength +
-                             ioRecvPci.cbExtraBytes;
-    if (!s_check_rem_and_log(in_s, reqd_data, "Reading SCARD_TRANSMIT(2)"))
-    {
-        return send_transmit_return(scard_client, 0,
-                                    XSCARD_F_INTERNAL_ERROR, NULL, 0, NULL);
-    }
-    in_uint8p(in_s,  ioSendPci.pbExtraBytes, ioSendPci.cbExtraBytes);
-    in_uint8p(in_s, pbSendBuffer, cbSendLength);
-    in_uint8p(in_s,  ioRecvPci.pbExtraBytes, ioRecvPci.cbExtraBytes);
-
-    scard_send_transmit(scard_client, send_transmit_return, 0,
-                        hCard, &ioSendPci,
-                        cbSendLength, pbSendBuffer,
-                        pioRecvPci,
-                        fpbRecvBufferIsNULL,
-                        cbRecvLength);
-    return 0;
+    return rv;
 }
 
 /*****************************************************************************/
-/* returns error */
-int
-scard_function_get_attrib_return(void *user_data,
-                                 struct stream *in_s,
-                                 int len, int status)
-{
-    return 0;
-}
-/*****************************************************************************/
-/* returns error */
 int
 send_control_return(struct scard_client *client,
+                    intptr_t closure,
                     unsigned int ReturnCode,
                     unsigned int cbOutBufferSize,
                     const char *pbRecvBuffer)
@@ -999,12 +999,14 @@ scard_process_control(struct trans *con, struct stream *in_s)
 {
     struct pcsc_uds_client *uds_client;
     struct scard_client *scard_client;
-    struct control_call *call_data;
 
     unsigned int hCard;
     unsigned int dwControlCode;
     unsigned int cbSendLength;
     unsigned int cbRecvLength;
+    char *pbSendBuffer;
+
+    int rv = 0;
 
     LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_control:");
     uds_client = (struct pcsc_uds_client *) (con->callback_data);
@@ -1013,41 +1015,34 @@ scard_process_control(struct trans *con, struct stream *in_s)
     if (!s_check_rem_and_log(in_s, 4 + 4 + 4 + 4,
                              "Reading SCARD_CONTROL(1)"))
     {
-        return send_control_return(scard_client,
-                                   XSCARD_F_INTERNAL_ERROR, 0, NULL);
+        send_control_return(scard_client, 0,
+                            XSCARD_F_INTERNAL_ERROR, 0, NULL);
+        rv = 1;
     }
-    in_uint32_le(in_s, hCard);
-    in_uint32_le(in_s, dwControlCode);
-    in_uint32_le(in_s, cbSendLength);
-    in_uint32_le(in_s, cbRecvLength);
-
-    if (!s_check_rem_and_log(in_s, cbSendLength,
-                             "Reading SCARD_CONTROL(2)"))
+    else
     {
-        return send_control_return(scard_client,
-                                   XSCARD_F_INTERNAL_ERROR, 0, NULL);
+        in_uint32_le(in_s, hCard);
+        in_uint32_le(in_s, dwControlCode);
+        in_uint32_le(in_s, cbSendLength);
+        in_uint32_le(in_s, cbRecvLength);
+
+        if (!s_check_rem_and_log(in_s, cbSendLength,
+                                 "Reading SCARD_CONTROL(2)"))
+        {
+            send_control_return(scard_client, 0,
+                                XSCARD_F_INTERNAL_ERROR, 0, NULL);
+            rv = 1;
+        }
+        else
+        {
+            in_uint8p(in_s, pbSendBuffer, cbSendLength);
+
+            scard_send_control(scard_client, send_control_return, 0,
+                               hCard, dwControlCode, cbSendLength,
+                               pbSendBuffer, cbRecvLength);
+        }
     }
-
-    unsigned int call_data_size =
-        offsetof(struct control_call, pbSendBuffer) +
-        cbSendLength * sizeof(call_data->pbSendBuffer[0]);
-
-    call_data = (struct control_call *)malloc(call_data_size);
-    if (call_data == NULL)
-    {
-        return send_control_return(scard_client,
-                                   XSCARD_E_NO_MEMORY, 0, NULL);
-    }
-
-    call_data->callback = send_control_return;
-    call_data->app_hcard = hCard;
-    call_data->dwControlCode = dwControlCode;
-    call_data->cbSendLength = cbSendLength;
-    call_data->cbRecvLength = cbRecvLength;
-    in_uint8a(in_s, call_data->pbSendBuffer, cbSendLength);
-
-    scard_send_control(scard_client, call_data);
-    return 0;
+    return rv;
 }
 
 /*****************************************************************************/
@@ -1058,6 +1053,15 @@ struct pcsc_status
 };
 
 
+/*****************************************************************************/
+/* returns error */
+int
+scard_function_get_attrib_return(void *user_data,
+                                 struct stream *in_s,
+                                 int len, int status)
+{
+    return 0;
+}
 /*****************************************************************************/
 static int
 send_status_return(struct scard_client *client,

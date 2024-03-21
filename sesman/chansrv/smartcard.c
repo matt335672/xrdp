@@ -186,9 +186,6 @@ static void scard_send_GetStatusChange(IRP *irp,
 static void
 scard_send_Status(struct stream *s, struct status_call *call_data,
                   const struct redir_scardhandle *hCard);
-static int
-scard_send_Control(struct stream *s, struct control_call *call_data,
-                   const struct redir_scardhandle *hCard);
 static int scard_send_GetAttrib(IRP *irp, char *card, int card_bytes,
                                 READER_STATE *rs);
 
@@ -233,6 +230,12 @@ scard_function_transmit_return(struct scard_client *client,
                                unsigned int len, unsigned int status);
 
 static int
+scard_function_control_return(struct scard_client *client,
+                              struct sc_call_data *call_data,
+                              struct stream *in_s,
+                              unsigned int len, unsigned int status);
+
+static int
 scard_function_common_context_return(struct scard_client *client,
                                      void *vcall_data, struct stream *in_s,
                                      unsigned int len, unsigned int status);
@@ -247,11 +250,6 @@ static int
 scard_function_status_return(struct scard_client *client,
                              void *vcall_data, struct stream *in_s,
                              unsigned int len, unsigned int status);
-
-static int
-scard_function_control_return(struct scard_client *client,
-                              void *vcall_data, struct stream *in_s,
-                              unsigned int len, unsigned int status);
 
 static void scard_handle_GetAttrib_Return(struct stream *s, IRP *irp,
         tui32 DeviceId,
@@ -1514,6 +1512,184 @@ scard_send_transmit(struct scard_client *client,
     }
 }
 
+/*****************************************************************************/
+void
+scard_send_control(struct scard_client *client,
+                   control_cb_t callback,
+                   intptr_t closure,
+                   unsigned int app_hcard,
+                   unsigned int dwControlCode,
+                   unsigned int cbInBufferSize,
+                   const char *pvInBuffer,
+                   unsigned int cbOutBufferSize)
+{
+    struct redir_scardhandle hCard;
+
+    /* Get the RDP-level context */
+    if (!scdata_lookup_card_mapping(client, app_hcard, &hCard))
+    {
+        callback(client, closure, XSCARD_E_INVALID_HANDLE, 0, NULL);
+    }
+    else
+    {
+        unsigned int ioctl_length = 128 + cbInBufferSize;
+        struct stream *s;
+
+        s = alloc_irp_and_ioctl(scdata_get_client_id(client),
+                                (void *)callback,
+                                closure,
+                                scard_function_control_return,
+                                0,
+                                SCARD_IOCTL_CONTROL, ioctl_length);
+        if (s == NULL)
+        {
+            LOG(LOG_LEVEL_ERROR, "system out of memory");
+            callback(client, closure, XSCARD_E_NO_MEMORY, 0, NULL);
+        }
+        else
+        {
+            /* see [MS-RDPESC] 2.2.2.20
+             *
+             * IDL:-
+             *
+             * typedef struct _REDIR_SCARDCONTEXT {
+             *    [range(0,16)] unsigned long cbContext;
+             *    [unique] [size_is(cbContext)] byte *pbContext;
+             *    } REDIR_SCARDCONTEXT;
+             *
+             * typedef struct _REDIR_SCARDHANDLE {
+             *    REDIR_SCARDCONTEXT Context;
+             *    [range(0,16)] unsigned long cbHandle;
+             *    [size_is(cbHandle)] byte *pbHandle;
+             *    } REDIR_SCARDHANDLE;
+             *
+             * typedef struct _Control_Call {
+             *    REDIR_SCARDHANDLE hCard;
+             *    unsigned long dwControlCode;
+             *    [range(0,66560)] unsigned long cbInBufferSize;
+             *    [unique] [size_is(cbInBufferSize)] const byte *pvInBuffer;
+             *    long fpvOutBufferIsNULL;
+             *    unsigned long cbOutBufferSize;
+             *    } Control_Call;
+             *
+             * Type summary:-
+             * hCard.Context.cbContext  Unsigned 32-bit word
+             * hCard.Context.pbContext  Embedded full ptr to conformant
+             *                          array of bytes
+             * hCard.cbHandle           Unsigned 32-bit word
+             * hCard.pbHandle           Embedded full ptr to conformant
+             *                          array of bytes
+             * dwControlCode            32-bit word
+             * cbInBufferSize           32-bit word
+             * pbSendBuffer             Embedded full ptr to conformant
+             *                          array of bytes
+             * fpvOutBufferIsNULL       32-bit word
+             * cbOutBufferSize          32-bit word
+             *
+             * NDR:-
+             *
+             * Offset   Decription
+             * 0        hCard.Context.cbContext
+             * 4        hCard.Context.pbContext Referent Identifier
+             * 8        hCard.cbHandle
+             * 12       hCard.pbHandle Referent Identifier
+             * 16       dwControlCode
+             * 20       cbInBufferSize
+             * 24       pbSendBuffer referent identifier
+             * 28       fpbRecvBufferIsNULL
+             * 32       cbOutBufferSize
+             * 36       length of context (hCard.Context.cbContext copy)
+             * 40       Context data (up to 16 bytes)
+             * ??       length of handle in bytes (hCard.cbHandle copy)
+             * ??       Handle data (up to 16 bytes)
+             * ??       Copy of cbInBufferSize
+             * ??       pvInBuffer data
+             */
+
+            unsigned int ControlCode;
+            int          bytes;
+            unsigned int ref_id = REFERENT_ID_BASE; /* Next referent ID */
+
+            ControlCode = dwControlCode;
+            if (ControlCode >= 0x42000000 && ControlCode < 0x42001000)
+            {
+                /* Convert the PCSC-Lite dwControlCode to a Windows value
+                 *
+                 * PCSC-Lite : SCARD_CTL_CODE(x)-> 0x42000000 + x
+                 * Windows : SCARD_CTL_CODE(x)
+                 *                         -> CTL_CODE(FILE_DEVICE_SMARTCARD,
+                 *                                     x,
+                 *                                     METHOD_BUFFERED,
+                 *                                     FILE_ANY_ACCESS)
+                 *                         -> ( (FILE_DEVICE_SMARTCARD << 16) |
+                 *                              (FILE_ANY_ACCESS << 14) |
+                 *                              (x << 2) |
+                 *                               METHOD_BUFFERED )
+                 *                         -> ( (0x31 << 16) | (0 << 14) |
+                 *                              (x << 2) | 0)
+                 */
+                ControlCode = (ControlCode & 0xfff) << 2;
+                ControlCode |= (0x31 << 16);
+            }
+
+            s_push_layer(s, mcs_hdr, 4); /* bytes, set later */
+            out_uint32_le(s, 0x00000000);
+
+            // REDIR_SCARDHANDLE hCard;
+            out_redir_scardhandle_part1(s, &hCard, &ref_id);
+
+            // unsigned long dwControlCode;
+            out_uint32_le(s, ControlCode);
+            // [range(0,66560)] unsigned long cbInBufferSize;
+            out_uint32_le(s, cbInBufferSize);
+            // [unique] [size_is(cbInBufferSize)] const byte *pvInBuffer;
+            if (cbInBufferSize > 0)
+            {
+                out_uint32_le(s, ref_id);
+                ref_id += REFERENT_ID_INC;
+            }
+            else
+            {
+                out_uint32_le(s, 0);
+            }
+            // long fpvOutBufferIsNULL;
+            out_uint32_le(s, 0);
+            // unsigned long cbOutBufferSize;
+            out_uint32_le(s, cbOutBufferSize);
+
+            // Now output all the pointed-to data
+            out_redir_scardhandle_part2(s, &hCard);
+            if (cbInBufferSize > 0)
+            {
+                out_align_s(s, 4);
+                out_uint32_le(s, cbInBufferSize);
+                out_uint8a(s, pvInBuffer, cbInBufferSize);
+            }
+
+            out_align_s(s, 8); // [MS-RPCE] 2.2.6.2 */
+            s_mark_end(s);
+
+            s_pop_layer(s, mcs_hdr);
+            bytes = (int) (s->end - s->p);
+            bytes -= 8;
+            out_uint32_le(s, bytes);
+
+            s_pop_layer(s, iso_hdr);
+            bytes = (int) (s->end - s->p);
+            bytes -= 28;
+            out_uint32_le(s, bytes);
+
+            bytes = (int) (s->end - s->data);
+
+            /* send to client */
+            LOG_DEVEL_HEXDUMP(LOG_LEVEL_TRACE, "scard_send_Control:", s->data, bytes);
+            send_channel_data(g_rdpdr_chan_id, s->data, bytes);
+
+            free_stream(s);
+        }
+    }
+}
+
 /**
  * Sends one of several calls which take a context and return a uint32_t
  *****************************************************************************/
@@ -1683,62 +1859,6 @@ scard_send_status(struct scard_client *client,
         {
             /* send IRP to client */
             scard_send_Status(s, call_data, &hCard);
-            free_stream(s);
-        }
-    }
-}
-
-/**
- * Communicate directly with the smart card reader
- *****************************************************************************/
-void
-scard_send_control(struct scard_client *client,
-                   struct control_call *call_data)
-{
-    IRP *irp;
-    struct stream *s;
-    struct redir_scardhandle hCard;
-
-    /* Set up common_call_private data for the return */
-    call_data->p.client_id = scdata_get_client_id(client);
-    call_data->p.unmarshall_callback = scard_function_control_return;
-
-    /* Get the RDP-level context */
-    if (!scdata_lookup_card_mapping(client,
-                                    call_data->app_hcard, &hCard))
-    {
-        call_data->callback(client, XSCARD_E_INVALID_HANDLE, 0, NULL);
-        free(call_data);
-    }
-    /* setup up IRP */
-    else if ((irp = devredir_irp_new()) == NULL)
-    {
-        LOG_DEVEL(LOG_LEVEL_ERROR, "system out of memory");
-        call_data->callback(client, XSCARD_E_NO_MEMORY, 0, NULL);
-        free(call_data);
-    }
-    else
-    {
-        unsigned int ioctl_length = 128 + call_data->cbSendLength;
-        irp->scard_index = g_scard_index;
-        irp->CompletionId = g_completion_id++;
-        irp->DeviceId = g_device_id;
-        irp->callback = scard_handle_irp_completion;
-        /* Pass ownership of the call_data to the IRP */
-        irp->user_data = call_data;
-        irp->extra_destructor = devredir_irp_free_user_data;
-
-        s = scard_make_new_ioctl(irp, SCARD_IOCTL_CONTROL, ioctl_length);
-        if (s == NULL)
-        {
-            LOG_DEVEL(LOG_LEVEL_ERROR, "scard_make_new_ioctl failed");
-            call_data->callback(client, XSCARD_E_NO_MEMORY, 0, NULL);
-            devredir_irp_delete(irp);
-        }
-        else
-        {
-            /* send IRP to client */
-            scard_send_Control(s, call_data, &hCard);
             free_stream(s);
         }
     }
@@ -2226,149 +2346,6 @@ scard_send_Status(struct stream *s, struct status_call *call_data,
 
     /* send to client */
     send_channel_data(g_rdpdr_chan_id, s->data, bytes);
-}
-
-/**
- * Communicate directly with the smart card reader
- *****************************************************************************/
-static int
-scard_send_Control(struct stream *s, struct control_call *call_data,
-                   const struct redir_scardhandle *hCard)
-{
-    /* see [MS-RDPESC] 2.2.2.20
-     *
-     * IDL:-
-     *
-     * typedef struct _REDIR_SCARDCONTEXT {
-     *    [range(0,16)] unsigned long cbContext;
-     *    [unique] [size_is(cbContext)] byte *pbContext;
-     *    } REDIR_SCARDCONTEXT;
-     *
-     * typedef struct _REDIR_SCARDHANDLE {
-     *    REDIR_SCARDCONTEXT Context;
-     *    [range(0,16)] unsigned long cbHandle;
-     *    [size_is(cbHandle)] byte *pbHandle;
-     *    } REDIR_SCARDHANDLE;
-     *
-     * typedef struct _Control_Call {
-     *    REDIR_SCARDHANDLE hCard;
-     *    unsigned long dwControlCode;
-     *    [range(0,66560)] unsigned long cbInBufferSize;
-     *    [unique] [size_is(cbInBufferSize)] const byte *pvInBuffer;
-     *    long fpvOutBufferIsNULL;
-     *    unsigned long cbOutBufferSize;
-     *    } Control_Call;
-     *
-     * Type summary:-
-     * hCard.Context.cbContext  Unsigned 32-bit word
-     * hCard.Context.pbContext  Embedded full ptr to conformant array of bytes
-     * hCard.cbHandle           Unsigned 32-bit word
-     * hCard.pbHandle           Embedded full ptr to conformant array of bytes
-     * dwControlCode            32-bit word
-     * cbInBufferSize           32-bit word
-     * pbSendBuffer             Embedded full ptr to conformant array of bytes
-     * fpvOutBufferIsNULL       32-bit word
-     * cbOutBufferSize          32-bit word
-     *
-     * NDR:-
-     *
-     * Offset   Decription
-     * 0        hCard.Context.cbContext
-     * 4        hCard.Context.pbContext Referent Identifier
-     * 8        hCard.cbHandle
-     * 12       hCard.pbHandle Referent Identifier
-     * 16       dwControlCode
-     * 20       cbInBufferSize
-     * 24       pbSendBuffer referent identifier
-     * 28       fpbRecvBufferIsNULL
-     * 32       cbOutBufferSize
-     * 36       length of context in bytes (hCard.Context.cbContext copy)
-     * 40       Context data (up to 16 bytes)
-     * ??       length of handle in bytes (hCard.cbHandle copy)
-     * ??       Handle data (up to 16 bytes)
-     * ??       Copy of cbInBufferSize
-     * ??       pvInBuffer data
-     */
-
-    unsigned int ControlCode;
-    int          bytes;
-    unsigned int ref_id = REFERENT_ID_BASE; /* Next referent ID to use */
-
-    ControlCode = call_data->dwControlCode;
-    if (ControlCode >= 0x42000000 && ControlCode < 0x42001000)
-    {
-        /* Convert the PCSC-Lite dwControlCode to a Windows value
-         *
-         * PCSC-Lite : SCARD_CTL_CODE(x) -> 0x42000000 + x
-         * Windows : SCARD_CTL_CODE(x) -> CTL_CODE(FILE_DEVICE_SMARTCARD,
-         *                                      x,
-         *                                      METHOD_BUFFERED,
-         *                                      FILE_ANY_ACCESS)
-         *                              -> ( (FILE_DEVICE_SMARTCARD << 16) |
-         *                                   (FILE_ANY_ACCESS << 14) |
-         *                                   (x << 2) |
-         *                                    METHOD_BUFFERED )
-         *                              -> ( (0x31 << 16) | (0 << 14) |
-         *                                   (x << 2) | 0)
-         */
-        ControlCode = (ControlCode & 0xfff) << 2;
-        ControlCode |= (0x31 << 16);
-    }
-
-    s_push_layer(s, mcs_hdr, 4); /* bytes, set later */
-    out_uint32_le(s, 0x00000000);
-
-    // REDIR_SCARDHANDLE hCard;
-    out_redir_scardhandle_part1(s, hCard, &ref_id);
-
-    // unsigned long dwControlCode;
-    out_uint32_le(s, ControlCode);
-    // [range(0,66560)] unsigned long cbInBufferSize;
-    out_uint32_le(s, call_data->cbSendLength);
-    // [unique] [size_is(cbInBufferSize)] const byte *pvInBuffer;
-    if (call_data->cbSendLength > 0)
-    {
-        out_uint32_le(s, ref_id);
-        ref_id += REFERENT_ID_INC;
-    }
-    else
-    {
-        out_uint32_le(s, 0);
-    }
-    // long fpvOutBufferIsNULL;
-    out_uint32_le(s, 0);
-    // unsigned long cbOutBufferSize;
-    out_uint32_le(s, call_data->cbRecvLength);
-
-    // Now output all the pointed-to data
-    out_redir_scardhandle_part2(s, hCard);
-    if (call_data->cbSendLength > 0)
-    {
-        out_align_s(s, 4);
-        out_uint32_le(s, call_data->cbSendLength);
-        out_uint8a(s, call_data->pbSendBuffer, call_data->cbSendLength);
-    }
-
-    out_align_s(s, 8); // [MS-RPCE] 2.2.6.2 */
-    s_mark_end(s);
-
-    s_pop_layer(s, mcs_hdr);
-    bytes = (int) (s->end - s->p);
-    bytes -= 8;
-    out_uint32_le(s, bytes);
-
-    s_pop_layer(s, iso_hdr);
-    bytes = (int) (s->end - s->p);
-    bytes -= 28;
-    out_uint32_le(s, bytes);
-
-    bytes = (int) (s->end - s->data);
-
-    /* send to client */
-    LOG_DEVEL_HEXDUMP(LOG_LEVEL_TRACE, "scard_send_Control:", s->data, bytes);
-    send_channel_data(g_rdpdr_chan_id, s->data, bytes);
-
-    return 0;
 }
 
 /**
@@ -3054,9 +3031,7 @@ scard_function_transmit_return(struct scard_client *client,
             goto done;
         }
         in_uint8s(in_s, 4);
-        // For the input data, just use a pointer into the stream buffer
-        pbRecvBuffer = in_s->p;
-        in_uint8s(in_s, cbRecvLength);
+        in_uint8p(in_s, pbRecvBuffer, cbRecvLength);
     }
     if (ioRecvPci.cbExtraBytes > 0)
     {
@@ -3072,11 +3047,94 @@ scard_function_transmit_return(struct scard_client *client,
     }
 
 done:
-    rv =  user_callback(client, call_data->closure,
-                        ReturnCode, pioRecvPci,
-                        cbRecvLength, pbRecvBuffer);
+    rv = user_callback(client, call_data->closure,
+                       ReturnCode, pioRecvPci,
+                       cbRecvLength, pbRecvBuffer);
     free(pioRecvPci);
     return rv;
+}
+
+/*****************************************************************************/
+/* returns error */
+static int
+scard_function_control_return(struct scard_client *client,
+                              struct sc_call_data *call_data,
+                              struct stream *in_s,
+                              unsigned int len, unsigned int status)
+{
+    /* see [MS-RDPESC] 2.2.3.6
+     *
+     * IDL:-
+     * typedef struct _Control_Return {
+     *    long ReturnCode;
+     *    [range(0,66560)] unsigned long cbOutBufferSize;
+     *    [unique] [size_is(cbOutBufferSize)] byte *pvOutBuffer;
+     * } Control_Return;
+     *
+     * Type summary:-
+     *
+     * ReturnCode         32-bit word
+     * cbOutBufferSize    32-bit word
+     * pvOutBuffer        Embedded full pointer to conformant array of bytes
+     *
+     * NDR:-
+     *
+     * Offset   Decription
+     * 0        ReturnCode
+     * 4        cbOutBufferSize
+     * 12       Referent identifier for pvOutBuffer
+     * if (pvOutBuffer != NULL)
+     * | ??       cbOutBufferSize copy
+     * | ??       pvOutBuffer bytes
+     */
+    unsigned int ReturnCode = HRESULT_TO_SCARD_STATUS(status);
+    unsigned int cbOutBufferSize = 0;
+    unsigned int out_buff_ref = 0;
+    char *pbOutBuffer = NULL;
+
+    control_cb_t user_callback = (control_cb_t)call_data->user_callback;
+
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_function_control_return:");
+
+    if (status != XSCARD_S_SUCCESS && status != XSCARD_E_INSUFFICIENT_BUFFER)
+    {
+        goto done;
+    }
+    if (!s_check_rem_and_log(in_s, 8 + 8 + 4 + 4 + 4,
+                             "[MS-RDPESC] Control_Return"))
+    {
+        ReturnCode = XSCARD_F_INTERNAL_ERROR;
+        goto done;
+    }
+    /* Skip headers, setting mcs_hdr to point to the NDR
+     * constructed type header so we can use in_align_s() */
+    in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.1 */
+    s_push_layer(in_s, mcs_hdr, 8); /* [MS-RPCE] 2.2.6.2 */
+
+    in_uint32_le(in_s, ReturnCode);
+    in_uint32_le(in_s, cbOutBufferSize);
+    in_uint32_le(in_s, out_buff_ref);
+
+    if (cbOutBufferSize > 0)
+    {
+        if (out_buff_ref == 0)
+        {
+            ReturnCode = XSCARD_F_INTERNAL_ERROR;
+            goto done;
+        }
+        if (!s_check_rem_and_log(in_s, 4 + cbOutBufferSize,
+                                 "[MS-RDPESC] Control_Return(2)"))
+        {
+            ReturnCode = XSCARD_F_INTERNAL_ERROR;
+            goto done;
+        }
+        in_uint8s(in_s, 4);
+        in_uint8p(in_s, pbOutBuffer, cbOutBufferSize);
+    }
+
+done:
+    return user_callback(client, call_data->closure,
+                         ReturnCode, cbOutBufferSize, pbOutBuffer);
 }
 
 /*****************************************************************************/
@@ -3262,90 +3320,6 @@ done:
                              utf8len, msz_readers, cbAtrLen, atr);
     free(msz_readers);
     return rv;
-}
-
-
-/*****************************************************************************/
-/* returns error */
-static int
-scard_function_control_return(struct scard_client *client,
-                              void *vcall_data, struct stream *in_s,
-                              unsigned int len, unsigned int status)
-{
-    /* see [MS-RDPESC] 2.2.3.6
-     *
-     * IDL:-
-     * typedef struct _Control_Return {
-     *    long ReturnCode;
-     *    [range(0,66560)] unsigned long cbOutBufferSize;
-     *    [unique] [size_is(cbOutBufferSize)] byte *pvOutBuffer;
-     * } Control_Return;
-     *
-     * Type summary:-
-     *
-     * ReturnCode         32-bit word
-     * cbOutBufferSize    32-bit word
-     * pvOutBuffer        Embedded full pointer to conformant array of bytes
-     *
-     * NDR:-
-     *
-     * Offset   Decription
-     * 0        ReturnCode
-     * 4        cbOutBufferSize
-     * 12       Referent identifier for pvOutBuffer
-     * if (pvOutBuffer != NULL)
-     * | ??       cbOutBufferSize copy
-     * | ??       pvOutBuffer bytes
-     */
-    struct control_call *call_data = (struct control_call *)vcall_data;
-    unsigned int ReturnCode = HRESULT_TO_SCARD_STATUS(status);
-    unsigned int cbOutBufferSize = 0;
-    unsigned int out_buff_ref = 0;
-    char *pvOutBuffer = NULL;
-
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_function_control_return:");
-
-    if (status != XSCARD_S_SUCCESS && status != XSCARD_E_INSUFFICIENT_BUFFER)
-    {
-        goto done;
-    }
-    if (!s_check_rem_and_log(in_s, 8 + 8 + 4 + 4 + 4,
-                             "[MS-RDPESC] Control_Return"))
-    {
-        ReturnCode = XSCARD_F_INTERNAL_ERROR;
-        goto done;
-    }
-    /* Skip headers, setting mcs_hdr to point to the NDR
-     * constructed type header so we can use in_align_s() */
-    in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.1 */
-    s_push_layer(in_s, mcs_hdr, 8); /* [MS-RPCE] 2.2.6.2 */
-
-    in_uint32_le(in_s, ReturnCode);
-    in_uint32_le(in_s, cbOutBufferSize);
-    in_uint32_le(in_s, out_buff_ref);
-
-    if (cbOutBufferSize > 0)
-    {
-        if (out_buff_ref == 0)
-        {
-            ReturnCode = XSCARD_F_INTERNAL_ERROR;
-            goto done;
-        }
-        if (!s_check_rem_and_log(in_s, 4 + cbOutBufferSize,
-                                 "[MS-RDPESC] Control_Return(2)"))
-        {
-            ReturnCode = XSCARD_F_INTERNAL_ERROR;
-            goto done;
-        }
-        in_uint8s(in_s, 4);
-        // For the input data, just use a pointer into the stream buffer
-        pvOutBuffer = in_s->p;
-        in_uint8s(in_s, cbOutBufferSize);
-    }
-
-done:
-    call_data->callback(client, ReturnCode, cbOutBufferSize, pvOutBuffer);
-    return 0;
 }
 
 /**

@@ -130,6 +130,14 @@ typedef int (*transmit_cb_t)(struct scard_client *client,
                              const struct scard_io_request *pioRecvPci,
                              unsigned int cbRecvLength,
                              const char *pbRecvBuffer);
+
+typedef int (*control_cb_t)(struct scard_client *client,
+                            intptr_t closure,
+                            unsigned int ReturnCode,
+                            unsigned int cbOutBufferSize,
+                            const char *pbOutBuffer);
+
+
 /*****************************************************************************/
 /* Structures used to hold call state while waiting for the
  * client to respond */
@@ -207,35 +215,6 @@ struct status_call
 
     /* See 2.2.2.18 */
     unsigned int app_hcard;
-};
-
-/**
- * Use this struct to make a control call
- *
- * Fill in all fields (apart from p) and pass to
- * scard_send_control(). The result will be received via the
- * callback, provided the client is still active.
- */
-struct control_call
-{
-    struct common_call_private p;
-
-    /** How to pass the result back to the client */
-    int (*callback)(struct scard_client *client,
-                    unsigned int ReturnCode,
-                    unsigned int cbOutBufferSize,
-                    const char *pbRecvBuffer);
-
-    /* See 2.2.2.20 */
-    unsigned int app_hcard;
-    unsigned int dwControlCode;
-    unsigned int cbSendLength;
-    unsigned int cbRecvLength;
-#ifdef __cplusplus
-    char pbSendBuffer[1];
-#else
-    char pbSendBuffer[];
-#endif
 };
 
 
@@ -444,6 +423,32 @@ scard_send_transmit(struct scard_client *client,
                     unsigned int cbRecvLength);
 
 /**
+ * Sends a control call to the RDP client ([MS-RDPESC] 2.2.2.20)
+ *
+ * @param client client
+ * @param callback How to be notified of the result
+ * @param closure Additional state info for the caller
+ * @param app_hcard call parameter
+ * @param dwControlCode call parameter
+ * @param cbInBufferSize call parameter
+ * @param pvInBuffer call parameter
+ * @param fpvOutBufferIsNULL call parameter
+ * @param cbOutBufferSize call parameter
+ *
+ * The value fpvOutBufferIsNULL documented in the IDL is not
+ * supported, and is set to zero on the call.
+ */
+void
+scard_send_control(struct scard_client *client,
+                   control_cb_t callback,
+                   intptr_t closure,
+                   unsigned int app_hcard,
+                   unsigned int dwControlCode,
+                   unsigned int cbInBufferSize,
+                   const char *pvInBuffer,
+                   unsigned int cbOutBufferSize);
+
+/**
  * Sends a is valid context / cancel call to the RDP client
  *
  * @param client client
@@ -475,19 +480,6 @@ void
 scard_send_status(struct scard_client *client,
                   struct status_call *call_data);
 
-
-/**
- * Sends a control call to the RDP client
- *
- * @param client client
- * @param call_data Info about the call
- *
- * The call_data must be on the heap. After this call, ownership of the
- * call_data is taken away from the caller.
- */
-void
-scard_send_control(struct scard_client *client,
-                   struct control_call *call_data);
 
 int  scard_send_get_attrib(void *user_data, char *card, int card_bytes,
                            READER_STATE *rs);
