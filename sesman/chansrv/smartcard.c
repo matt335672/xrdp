@@ -178,13 +178,10 @@ scard_send_CommonContextLongReturn(
     struct common_context_long_return_call *call_data,
     const struct redir_scardcontext *context);
 
-static void scard_send_GetStatusChange(IRP *irp,
-                                       char *context, int context_bytes,
-                                       int wide,
-                                       tui32 timeout, tui32 num_readers,
-                                       READER_STATE *rsa);
+#if 0
 static int scard_send_GetAttrib(IRP *irp, char *card, int card_bytes,
                                 READER_STATE *rs);
+#endif
 
 /******************************************************************************
 **                    local callbacks into this module                       **
@@ -239,20 +236,16 @@ scard_function_status_return(struct scard_client *client,
                              unsigned int len, unsigned int status);
 
 static int
+scard_function_get_status_change_return(struct scard_client *client,
+                                        struct sc_call_data *call_data,
+                                        struct stream *in_s,
+                                        unsigned int len, unsigned int status);
+
+static int
 scard_function_common_context_return(struct scard_client *client,
                                      void *vcall_data, struct stream *in_s,
                                      unsigned int len, unsigned int status);
 
-
-static void scard_handle_GetStatusChange_Return(struct stream *s, IRP *irp,
-        tui32 DeviceId, tui32 CompletionId,
-        tui32 IoStatus);
-
-
-static void scard_handle_GetAttrib_Return(struct stream *s, IRP *irp,
-        tui32 DeviceId,
-        tui32 CompletionId,
-        tui32 IoStatus);
 
 /******************************************************************************
 **                                                                           **
@@ -1813,6 +1806,200 @@ scard_send_status(struct scard_client *client,
     }
 }
 
+/*****************************************************************************/
+void
+scard_send_get_status_change(struct scard_client *client,
+                             get_status_change_cb_t callback,
+                             intptr_t closure,
+                             unsigned int app_context,
+                             unsigned int dwTimeOut,
+                             unsigned int cReaders,
+                             const struct reader_state *rgReaderStates)
+{
+    struct redir_scardcontext Context;
+    /* Get the RDP-level context */
+    if (!scdata_lookup_context_mapping(client, app_context, &Context))
+    {
+        callback(client, closure, XSCARD_E_INVALID_HANDLE, 0, NULL);
+    }
+    else
+    {
+        struct stream *s;
+        unsigned int ioctl_size = 64;
+        unsigned int i;
+        // Add the space needed for reader states and reader names (Unicode)
+        // to the ioctl_size
+        for (i = 0 ; i < cReaders; ++i)
+        {
+            const char *rdr_name = rgReaderStates[i].szReader;
+            ioctl_size += 64;
+            if (rdr_name != NULL)
+            {
+                unsigned int rdr_name_len = strlen(rdr_name);
+                ioctl_size += 2 * utf8_as_utf16_word_count(rdr_name,
+                              rdr_name_len + 1);
+            }
+        }
+
+        s = alloc_irp_and_ioctl(scdata_get_client_id(client),
+                                (void *)callback,
+                                closure,
+                                scard_function_get_status_change_return,
+                                0,
+                                SCARD_IOCTL_GET_STATUS_CHANGEW, ioctl_size);
+        if (s == NULL)
+        {
+            LOG(LOG_LEVEL_ERROR, "system out of memory");
+            callback(client, closure, XSCARD_E_NO_MEMORY, 0, NULL);
+        }
+        else
+        {
+            /* see [MS-RDPESC] 2.2.2.12
+             *
+             * Here is a breakdown of the Wide-char variant
+             *
+             * IDL:-
+             *
+             * typedef struct _REDIR_SCARDCONTEXT {
+             *    [range(0,16)] unsigned long cbContext;
+             *    [unique] [size_is(cbContext)] byte *pbContext;
+             *    } REDIR_SCARDCONTEXT;
+             *
+             * typedef struct _ReaderState_Common_Call {
+             *    unsigned long dwCurrentState;
+             *    unsigned long dwEventState;
+             *    [range(0,36)] unsigned long cbAtr;
+             *    byte rgbAtr[36];
+             *    } ReaderState_Common_Call;
+             *
+             * typedef struct _ReaderStateW {
+             *   [string] const wchar_t* szReader;
+             *   ReaderState_Common_Call Common;
+             *   } ReaderStateW;
+             *
+             * struct _GetStatusChangeW_Call {
+             *    REDIR_SCARDCONTEXT Context;
+             *    unsigned long dwTimeOut;
+             *    [range(0,11)] unsigned long cReaders;
+             *    [size_is(cReaders)] ReaderStateW* rgReaderStates;
+             *    } GetStatusChangeW_Call;
+             *
+             * Type summary:-
+             *
+             * Context.cbContext  Unsigned 32-bit word
+             * Context.pbContext  Embedded full pointer to conformant
+             *                    array of bytes
+             * dwTimeOut          Unsigned 32-bit word
+             * cReaders           Unsigned 32-bit word
+             * rgReaderStates     Embedded full pointer to array of
+             *                    rgReaderStates
+             * rgReaderStates.szReader
+             *                    Embedded full pointer to conformant
+             *                    and varying string of [Windows] wchar_t
+             * rgReaderStates.Common.dwCurrentState
+             *                    Unsigned 32-bit word
+             * rgReaderStates.Common.dwEventState
+             *                    Unsigned 32-bit word
+             * rgReaderStates.Common.cbAtr
+             *                    Unsigned 32-bit word
+             * rgReaderStates.Common.rgbAtr[36]
+             *                    Uni-dimensional fixed array
+             *
+             * NDR:-
+             * Offset   Decription
+             * 0        Context.cbContext
+             * 4        Referent Identifier for pbContext
+             * 8        dwTimeOut
+             * 12       cReaders
+             * 16       Referent Identifier for rgReaderStates
+             * 20       Conformant Array pointed to by pbContext
+             * ??       Conformant Array pointed to by rgReaderStates.
+             *          Each element
+             *          of this array has a pointer to a string for the name
+             * ??       String names pointed to in the above array.
+             */
+            int bytes;
+            unsigned int ref_id = REFERENT_ID_BASE; /* Next referent ID */
+
+            s_push_layer(s, mcs_hdr, 4); /* bytes, set later */
+            out_uint32_le(s, 0x00000000);
+            out_redir_scardcontext_part1(s, &Context, &ref_id);
+
+            out_uint32_le(s, dwTimeOut);
+            out_uint32_le(s, cReaders);
+            if (cReaders > 0)
+            {
+                out_uint32_le(s, ref_id);
+                ref_id += REFERENT_ID_INC;
+            }
+            else
+            {
+                out_uint32_le(s, 0);
+            }
+
+            // At the end of the struct come the pointed-to structures
+            out_redir_scardcontext_part2(s, &Context);
+
+            if (cReaders > 0)
+            {
+                // rgReaderState is a Uni-dimensional conformant array
+                out_align_s(s, 4);
+                out_uint32_le(s, cReaders);
+
+                for (i = 0; i < cReaders; ++i)
+                {
+                    const struct reader_state *rs = &rgReaderStates[i];
+                    //  [string] const wchar_t* szReader (wide)
+                    if (rs->szReader != NULL)
+                    {
+                        out_uint32_le(s, ref_id);
+                        ref_id += REFERENT_ID_INC;
+                    }
+                    else
+                    {
+                        out_uint32_le(s, 0);
+                    }
+                    // Don't send over SCARD_STATE_CHANGED bits
+                    out_uint32_le(s, rs->dwCurrentState & ~SCARD_STATE_CHANGED);
+                    out_uint32_le(s, rs->dwEventState & ~SCARD_STATE_CHANGED);
+                    out_uint32_le(s, rs->cbAtr);
+                    out_uint8p(s, rs->rgbAtr, 36);
+                }
+
+                /* insert card reader names */
+                for (i = 0; i < cReaders; ++i)
+                {
+                    const struct reader_state *rs = &rgReaderStates[i];
+                    if (rs->szReader != NULL)
+                    {
+                        out_conformant_and_varying_string(s, rs->szReader);
+                    }
+                }
+            }
+
+            out_align_s(s, 8); // [MS-RPCE] 2.2.6.2 */
+            s_mark_end(s);
+
+            s_pop_layer(s, mcs_hdr);
+            bytes = (int) (s->end - s->p);
+            bytes -= 8;
+            out_uint32_le(s, bytes);
+
+            s_pop_layer(s, iso_hdr);
+            bytes = (int) (s->end - s->p);
+            bytes -= 28;
+            out_uint32_le(s, bytes);
+
+            bytes = (int) (s->end - s->data);
+
+            /* send to client */
+            LOG_DEVEL_HEXDUMP(LOG_LEVEL_TRACE, "scard_send_GetStatusChange:", s->data, bytes);
+            send_channel_data(g_rdpdr_chan_id, s->data, bytes);
+            free_stream(s);
+        }
+    }
+}
+
 /**
  * Sends one of several calls which take a context and return a uint32_t
  *****************************************************************************/
@@ -1892,43 +2079,7 @@ scard_send_common_context_long_return(
     }
 }
 
-
-/**
- * Send get change in status command
- *
- * @param  con          connection to client
- * @param  wide         TRUE if unicode string
- * @param  timeout      timeout in milliseconds, -1 for infinity
- * @param  num_readers  number of entries in rsa
- * @param  rsa          array of READER_STATEs
- *****************************************************************************/
-int
-scard_send_get_status_change(void *call_data, char *context, int context_bytes,
-                             int wide, tui32 timeout, tui32 num_readers,
-                             READER_STATE *rsa)
-{
-    IRP *irp;
-
-    /* setup up IRP */
-    if ((irp = devredir_irp_new()) == NULL)
-    {
-        LOG_DEVEL(LOG_LEVEL_ERROR, "system out of memory");
-        return 1;
-    }
-
-    irp->scard_index = g_scard_index;
-    irp->CompletionId = g_completion_id++;
-    irp->DeviceId = g_device_id;
-    irp->callback = scard_handle_GetStatusChange_Return;
-    irp->user_data = call_data;
-
-    /* send IRP to client */
-    scard_send_GetStatusChange(irp, context, context_bytes, wide, timeout,
-                               num_readers, rsa);
-
-    return 0;
-}
-
+#if 0
 /**
  * Get reader attributes
  *****************************************************************************/
@@ -1952,10 +2103,11 @@ scard_send_get_attrib(void *call_data, char *card, int card_bytes,
     irp->user_data = call_data;
 
     /* send IRP to client */
-    scard_send_GetAttrib(irp, card, card_bytes, rs);
+    //scard_send_GetAttrib(irp, card, card_bytes, rs);
 
     return 0;
 }
+#endif
 
 /******************************************************************************
 **                                                                           **
@@ -2148,173 +2300,7 @@ scard_send_CommonContextLongReturn(
     send_channel_data(g_rdpdr_chan_id, s->data, bytes);
 }
 
-/**
- * Get change in status
- *
- * @param  irp          I/O resource pkt
- * @param  wide         TRUE if unicode string
- * @param  timeout      timeout in milliseconds, -1 for infinity
- * @param  num_readers  number of entries in rsa
- * @param  rsa          array of READER_STATEs
- *****************************************************************************/
-static void
-scard_send_GetStatusChange(IRP *irp, char *context, int context_bytes,
-                           int wide, tui32 timeout,
-                           tui32 num_readers, READER_STATE *rsa)
-{
-    /* see [MS-RDPESC] 2.2.2.11 for ASCII
-     * see [MS-RDPESC] 2.2.2.12 for Wide char
-     *
-     * Here is a breakdown of the Wide-char variant
-     *
-     * IDL:-
-     *
-     * typedef struct _REDIR_SCARDCONTEXT {
-     *    [range(0,16)] unsigned long cbContext;
-     *    [unique] [size_is(cbContext)] byte *pbContext;
-     *    } REDIR_SCARDCONTEXT;
-     *
-     * typedef struct _ReaderState_Common_Call {
-     *    unsigned long dwCurrentState;
-     *    unsigned long dwEventState;
-     *    [range(0,36)] unsigned long cbAtr;
-     *    byte rgbAtr[36];
-     *    } ReaderState_Common_Call;
-     *
-     * typedef struct _ReaderStateW {
-     *   [string] const wchar_t* szReader;
-     *   ReaderState_Common_Call Common;
-     *   } ReaderStateW;
-     *
-     * struct _GetStatusChangeW_Call {
-     *    REDIR_SCARDCONTEXT Context;
-     *    unsigned long dwTimeOut;
-     *    [range(0,11)] unsigned long cReaders;
-     *    [size_is(cReaders)] ReaderStateW* rgReaderStates;
-     *    } GetStatusChangeW_Call;
-     *
-     * Type summary:-
-     *
-     * Context.cbContext  Unsigned 32-bit word
-     * Context.pbContext  Embedded full pointer to conformant array of bytes
-     * dwTimeOut          Unsigned 32-bit word
-     * cReaders           Unsigned 32-bit word
-     * rgReaderStates
-     *                    Embedded full pointer to array of rgReaderStates
-     * rgReaderStates.szReader
-     *                    Embedded full pointer to conformant and varying
-     *                    string of [Windows] wchar_t
-     * rgReaderStates.Common.dwCurrentState
-     *                    Unsigned 32-bit word
-     * rgReaderStates.Common.dwEventState
-     *                    Unsigned 32-bit word
-     * rgReaderStates.Common.cbAtr
-     *                    Unsigned 32-bit word
-     * rgReaderStates.Common.rgbAtr[36]
-     *                    Uni-dimensional fixed array
-     *
-     * NDR:-
-     * Offset   Decription
-     * 0        Context.cbContext
-     * 4        Referent Identifier for pbContext
-     * 8        dwTimeOut;
-     * 12       cReaders;
-     * 16       Referent Identifier for rgReaderStates
-     * 20       Conformant Array pointed to by pbContext
-     * ??       Conformant Array pointed to by rgReaderStates. Each element
-     *          of this array has a pointer to a string for the name
-     * ??       String names pointed to in the above array.
-     */
-
-    SMARTCARD     *sc;
-    READER_STATE  *rs;
-    struct stream *s;
-    tui32          ioctl;
-    int            bytes;
-    unsigned int   i;
-
-    if ((sc = smartcards[irp->scard_index]) == NULL)
-    {
-        LOG_DEVEL(LOG_LEVEL_ERROR, "smartcards[%d] is NULL", irp->scard_index);
-        return;
-    }
-
-    ioctl = (wide) ? SCARD_IOCTL_GET_STATUS_CHANGEW :
-            SCARD_IOCTL_GET_STATUS_CHANGEA;
-
-    if ((s = scard_make_new_ioctl(irp, ioctl, 4096)) == NULL)
-    {
-        LOG_DEVEL(LOG_LEVEL_ERROR, "scard_make_new_ioctl failed");
-        return;
-    }
-
-    s_push_layer(s, mcs_hdr, 4); /* bytes, set later */
-    out_uint32_le(s, 0x00000000);
-    // REDIR_SCARDCONTEXT Context;
-    out_uint32_le(s, context_bytes);
-    out_uint32_le(s, 0x00020000);
-
-    // unsigned long dwTimeOut;
-    out_uint32_le(s, timeout);
-    // [range(0,11)] unsigned long cReaders;
-    out_uint32_le(s, num_readers);
-    // [size_is(cReaders)] ReaderStateW* rgReaderStates;
-    out_uint32_le(s, 0x00020004);
-
-    // At the end of the struct come the pointed-to structures
-
-    // Context field pbContext is a Uni-dimensional conformant array
-    out_uint32_le(s, context_bytes);
-    out_uint8a(s, context, context_bytes);
-
-    // rgReaderState is a Uni-dimensional conformant array
-    out_align_s(s, 4);
-    out_uint32_le(s, num_readers);
-
-    /* insert card reader state */
-    for (i = 0; i < num_readers; i++)
-    {
-        rs = &rsa[i];
-        //  [string] const wchar_t* szReader (wide)
-        //  [string] const char_t* szReader (ASCII)
-        out_uint32_le(s, 0x00020008 + (i * 4));
-        //  unsigned long dwCurrentState;
-        out_uint32_le(s, rs->current_state);
-        //  unsigned long dwEventState;
-        out_uint32_le(s, rs->event_state);
-        //  [range(0,36)] unsigned long cbAtr;
-        out_uint32_le(s, rs->atr_len);
-        //  byte rgbAtr[36];
-        out_uint8p(s, rs->atr, 33);
-        out_uint8s(s, 3);
-    }
-
-    /* insert card reader names */
-    for (i = 0; i < num_readers; i++)
-    {
-        rs = &rsa[i];
-        out_conformant_and_varying_string(s, rs->reader_name);
-    }
-
-    s_mark_end(s);
-
-    s_pop_layer(s, mcs_hdr);
-    bytes = (int) (s->end - s->p);
-    bytes -= 8;
-    out_uint32_le(s, bytes);
-
-    s_pop_layer(s, iso_hdr);
-    bytes = (int) (s->end - s->p);
-    bytes -= 28;
-    out_uint32_le(s, bytes);
-
-    bytes = (int) (s->end - s->data);
-
-    /* send to client */
-    LOG_DEVEL_HEXDUMP(LOG_LEVEL_TRACE, "scard_send_GetStatusChange:", s->data, bytes);
-    send_channel_data(g_rdpdr_chan_id, s->data, bytes);
-}
-
+#if 0
 /**
  * Get reader attributes
  *****************************************************************************/
@@ -2376,6 +2362,7 @@ scard_send_GetAttrib(IRP *irp, char *card, int card_bytes, READER_STATE *rs)
     send_channel_data(g_rdpdr_chan_id, s->data, bytes);
     return 0;
 }
+#endif
 
 /******************************************************************************
 **                                                                           **
@@ -3229,6 +3216,110 @@ done:
     return rv;
 }
 
+/*****************************************************************************/
+static int
+scard_function_get_status_change_return(struct scard_client *client,
+                                        struct sc_call_data *call_data,
+                                        struct stream *in_s,
+                                        unsigned int len, unsigned int status)
+{
+    /* see [MS-RDPESC] 2.2.3.5
+     *
+     * IDL:-
+     *
+     * typedef struct _ReaderState_Return {
+     *   unsigned long dwCurrentState;
+     *   unsigned long dwEventState;
+     *   [range(0,36)] unsigned long cbAtr;
+     *   byte rgbAtr[36];
+     *   } ReaderState_Return;
+     *
+     * typedef struct _LocateCards_Return {
+     *   long ReturnCode;
+     *   [range(0, 10)] unsigned long cReaders;
+     *   [size_is(cReaders)] ReaderState_Return *rgReaderStates;
+     *   } LocateCards_Return,
+     *   GetStatusChange_Return;
+     *
+     * NDR:-
+     *
+     * Offset   Decription
+     * 0        ReturnCode
+     * 4        cReaders
+     * 8        Referent Identifier for rgReaderStates (could be NULL)
+     * if (ReaderStates != NULL)
+     * | foreach (reader in ReaderStates)
+     *   | xx   dwCurrentState
+     *   | xx+4 dwEventState
+     *   | xx+8 cbAtr
+     *   | xx+12 rgbAtr
+     */
+
+    unsigned int ReturnCode = HRESULT_TO_SCARD_STATUS(status);
+    int rv;
+
+    unsigned int cReaders = 0;
+    unsigned int reader_states_ref;
+    struct reader_state_return *rgReaderStates = NULL;
+
+    get_status_change_cb_t user_callback =
+        (get_status_change_cb_t)call_data->user_callback;
+
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_function_get_status_change_return:");
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "  status 0x%8.8x", status);
+
+    if (status != 0)
+    {
+        goto done;
+    }
+
+    if (!s_check_rem_and_log(in_s, 8 + 8 + 4 + 4 + 4,
+                             "[MS-RDPESC] GetStatusChange_Return(1)"))
+    {
+        goto done;
+    }
+
+    /* Skip headers, setting mcs_hdr to point to the NDR
+     * constructed type header so we can use in_align_s() */
+    in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.1 */
+    s_push_layer(in_s, mcs_hdr, 8); /* [MS-RPCE] 2.2.6.2 */
+
+    in_uint32_le(in_s, ReturnCode);
+    in_uint32_le(in_s, cReaders);
+    in_uint32_le(in_s, reader_states_ref);
+    if (cReaders > 0 && reader_states_ref != 0)
+    {
+        unsigned int i;
+        if (!s_check_rem_and_log(in_s, 48 * cReaders,
+                                 "[MS-RDPESC] GetStatusChange_Return(2)"))
+        {
+            goto done;
+        }
+        rgReaderStates = (struct reader_state_return *)
+                         malloc(sizeof(rgReaderStates[0]) * cReaders);
+        if (rgReaderStates == NULL)
+        {
+            ReturnCode = XSCARD_E_NO_MEMORY;
+            cReaders = 0;
+            goto done;
+        }
+
+        for (i = 0; i < cReaders; ++i)
+        {
+            in_uint32_le(in_s, rgReaderStates[i].dwCurrentState);
+            in_uint32_le(in_s, rgReaderStates[i].dwEventState);
+            in_uint32_le(in_s, rgReaderStates[i].cbAtr);
+            in_uint8a(in_s, rgReaderStates[i].rgbAtr, 36);
+        }
+    }
+
+done:
+    rv = user_callback(client, call_data->closure,
+                       ReturnCode, cReaders, rgReaderStates);
+    free(rgReaderStates);
+    return rv;
+}
+
 
 /*****************************************************************************/
 /* returns error */
@@ -3281,30 +3372,7 @@ scard_function_common_context_return(struct scard_client *client,
     return call_data->callback(client, ReturnCode);
 }
 
-/**
- *
- *****************************************************************************/
-static void
-scard_handle_GetStatusChange_Return(struct stream *s, IRP *irp,
-                                    tui32 DeviceId, tui32 CompletionId,
-                                    tui32 IoStatus)
-{
-    tui32 len;
-
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "entered");
-    /* sanity check */
-    if ((DeviceId != irp->DeviceId) || (CompletionId != irp->CompletionId))
-    {
-        LOG_DEVEL(LOG_LEVEL_ERROR, "DeviceId/CompletionId do not match those in IRP");
-        return;
-    }
-    /* get OutputBufferLen */
-    xstream_rd_u32_le(s, len);
-    scard_function_get_status_change_return(irp->user_data, s, len, IoStatus);
-    devredir_irp_delete(irp);
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "leaving");
-}
-
+#if 0
 /**
  *
  *****************************************************************************/
@@ -3329,3 +3397,4 @@ scard_handle_GetAttrib_Return(struct stream *s, IRP *irp, tui32 DeviceId,
     devredir_irp_delete(irp);
     LOG_DEVEL(LOG_LEVEL_DEBUG, "leaving");
 }
+#endif

@@ -252,6 +252,38 @@ enum pcsc_message_code
 // 28+cBytes cbAtr
 //
 // *****************************************************************************
+//  G E T   S T A T U S  C H A N G E
+// *****************************************************************************
+// Request (See [MS-RDPESC] 2.2.2.12 / 2.2.1.7 / 2.2.1.5) :-
+// Offset Value
+// 0      Header, code SCARD_GET_STATUS_CHANGE
+// 8      hContext
+// 12     dwTimeout
+// 16     cReaders
+// (for each reader)
+// | xx+0  Length of name (+ terminator)
+// | xx+4 current state
+// | xx+8 new state
+// | xx+12 cbAtr (0..36)
+// | xx+16 ATR
+// + xx+52 <reader-end>
+// (for each reader)
+// + yy+0 Bytes for name
+//
+// Response (See [MS-RDPESC] 2.2.3.5 / 2.2.1.11) :-
+// Offset Value
+// 0      Header, code SCARD_GET_STATUS_CHANGE
+// 8      ReturnCode
+// 12     cReaders
+// (for each reader)
+// | xx+0 current state
+// | xx+4 new state
+// | xx+8 cbAtr (0..36)
+// | xx+12 ATR
+// + xx+48 <reader-end>
+//
+//
+// *****************************************************************************
 //  C A N C E L
 // *****************************************************************************
 // Request (See [MS-RDPESC] 2.2.2.2) :-

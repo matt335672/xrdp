@@ -17,17 +17,19 @@
  *
  */
 
+#ifndef _SMARTCARD_H
+#define _SMARTCARD_H
+
 /*
  * smartcard redirection support
  */
 
 #include "arch.h"
-
-#ifndef _SMARTCARD_H
-#define _SMARTCARD_H
+struct scard_client;
+struct stream;
 
 /**
- * Structure used as part of a transmit_call
+ * Structure used as part of a transmit call
  *
  * See [MS-RDPESC] 2.2.1.8
  */
@@ -38,57 +40,32 @@ struct scard_io_request
     char *pbExtraBytes;
 };
 
-typedef struct reader_state
+/**
+ * Structure used as part of a get status change call
+ *
+ * See [MS-RDPESC] 2.2.1.7 and 2.2.1.5
+ */
+struct reader_state
 {
-    char   reader_name[128];
-    tui32  current_state;
-    tui32  event_state;
-    tui32  atr_len; /* number of bytes in atr[] */
-    tui8   atr[36];
+    char   *szReader;
+    tui32  dwCurrentState;
+    tui32  dwEventState;
+    tui32  cbAtr; /* number of bytes in atr[] */
+    tui8   rgbAtr[36];
+};
 
-    /*
-     * share mode flag, can be one of:
-     *  SCARD_SHARE_EXCLUSIVE  app not willing to share smartcard with other apps
-     *  SCARD_SHARE_SHARED     app willing to share smartcard with other apps
-     *  SCARD_SHARE_DIRECT     app demands direct control of smart card, hence
-     *                         it is not available to other readers
-     */
-    tui32  dwShareMode;
-
-    /*
-     * This field MUST have a value from Table A which is logically
-     * OR'ed with a value from Table B.
-     */
-    tui32  dwPreferredProtocols;
-
-    /*
-     * initialization type, must be one of the initialization type
-     * defined above
-     */
-    tui32  init_type;
-
-    /* required by scard_send_transmit(), scard_send_control() */
-    tui32 map0;
-    tui32 map1;
-    tui32 map2;
-    tui32 map3;
-    tui32 map4;
-    tui32 map5;
-    tui32 map6;
-
-    tui32 dwProtocol;
-    tui32 cbPciLength;
-    tui32 cbSendLength;
-    tui32 cbRecvLength;
-    tui32 dwControlCode;
-    tui32 cbOutBufferSize;
-    tui32 dwAttribId;
-    tui32 dwAttrLen;
-
-} READER_STATE;
-
-struct scard_client;
-struct stream;
+/**
+ * Structure used as part of a get status change return
+ *
+ * See [MS-RDPESC] 2.2.1.11
+ */
+struct reader_state_return
+{
+    tui32  dwCurrentState;
+    tui32  dwEventState;
+    tui32  cbAtr; /* number of bytes in atr[] */
+    tui8   rgbAtr[36];
+};
 
 /*****************************************************************************/
 /* Callback types */
@@ -147,6 +124,12 @@ typedef int (*status_cb_t)(struct scard_client *client,
                            unsigned int cbAtrLen,
                            const char *pbAtr);
 
+typedef int (*get_status_change_cb_t)(
+    struct scard_client *client,
+    intptr_t closure,
+    unsigned int ReturnCode,
+    unsigned int cReaders,
+    struct reader_state_return *rgReaderStates);
 
 /*****************************************************************************/
 /* Structures used to hold call state while waiting for the
@@ -433,7 +416,7 @@ scard_send_control(struct scard_client *client,
                    unsigned int cbOutBufferSize);
 
 /**
- * Sends a status call to the RDP client ([MS-RDPESC] 2.2.2.18)
+ * Sends a status call to the RDP client ([MS-RDPESC] 2.2.2.12)
  *
  * @param client client
  * @param callback How to be notified of the result
@@ -450,6 +433,22 @@ scard_send_status(struct scard_client *client,
                   unsigned int app_hcard);
 
 /**
+ * Sends a get status change call to the RDP client ([MS-RDPESC] 2.2.2.18)
+ *
+ * @param client client
+ * @param callback How to be notified of the result
+ * @param closure Additional state info for the caller
+ */
+void
+scard_send_get_status_change(struct scard_client *client,
+                             get_status_change_cb_t callback,
+                             intptr_t closure,
+                             unsigned int app_context,
+                             unsigned int dwTimeOut,
+                             unsigned int cReaders,
+                             const struct reader_state *rgReaderStates);
+
+/**
  * Sends a is valid context / cancel call to the RDP client
  *
  * @param client client
@@ -463,15 +462,10 @@ scard_send_common_context_long_return(
     struct scard_client *client,
     struct common_context_long_return_call *call_data);
 
-int  scard_send_get_status_change(void *user_data,
-                                  char *context, int context_bytes,
-                                  int wide, tui32 timeout,
-                                  tui32 num_readers, READER_STATE *rsa);
-
-
+#if 0
 int  scard_send_get_attrib(void *user_data, char *card, int card_bytes,
                            READER_STATE *rs);
-
+#endif
 /*
  * Notes:
  *      SCardTransmit - partially done

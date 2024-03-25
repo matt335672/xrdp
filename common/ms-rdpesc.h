@@ -50,4 +50,7 @@
 #define SCARD_SHARE_SHARED          0x00000002
 #define SCARD_SHARE_DIRECT          0x00000003
 
+/* see [MS-RDPESC] 2.2.7 Reader State */
+#define SCARD_STATE_CHANGED         0x00000002
+
 #endif /* MS_RDPESC_H */

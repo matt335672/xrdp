@@ -1126,6 +1126,140 @@ scard_process_status(struct trans *con, struct stream *in_s)
 
     return rv;
 }
+
+/*****************************************************************************/
+static int
+send_get_status_change_return(struct scard_client *client,
+                              intptr_t closure,
+                              unsigned int ReturnCode,
+                              unsigned int cReaders,
+                              struct reader_state_return *rgReaderStates)
+{
+    struct pcsc_uds_client *uds_client = GET_PCSC_CLIENT(client);
+    struct trans *con = uds_client->con;
+    unsigned int stream_size = 64 + cReaders * 48;
+    struct stream *out_s = trans_get_out_s(con, stream_size);
+    if (out_s == NULL)
+    {
+        return 1;
+    }
+
+    unsigned int index;
+
+    s_push_layer(out_s, iso_hdr, 8);
+    out_uint32_le(out_s, ReturnCode); /* XSCARD_S_SUCCESS status */
+    out_uint32_le(out_s, cReaders); /* cReaders */
+    for (index = 0 ; index < cReaders; ++index)
+    {
+        out_uint32_le(out_s, rgReaderStates[index].dwCurrentState);
+        out_uint32_le(out_s, rgReaderStates[index].dwEventState);
+        out_uint32_le(out_s, rgReaderStates[index].cbAtr);
+        out_uint8a(out_s, rgReaderStates[index].rgbAtr, 36);
+    }
+
+    s_mark_end(out_s);
+    unsigned int bytes = (unsigned int) (out_s->end - out_s->data);
+    s_pop_layer(out_s, iso_hdr);
+    out_uint32_le(out_s, bytes - 8);
+    out_uint32_le(out_s, SCARD_GET_STATUS_CHANGE);
+    return trans_force_write(con);
+}
+
+/*****************************************************************************/
+/* returns error */
+int
+scard_process_get_status_change(struct trans *con, struct stream *in_s)
+{
+    int rv = 0;
+    struct pcsc_uds_client *uds_client;
+    struct scard_client *scard_client;
+
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_get_status_change:");
+    uds_client = (struct pcsc_uds_client *) (con->callback_data);
+    scard_client = uds_client->scard_client;
+
+    unsigned int hContext;
+    unsigned int dwTimeout;
+    unsigned int cReaders;
+    struct reader_state *rsa = NULL;
+    unsigned int *str_lengths = NULL;
+    unsigned int str_space = 0;
+    unsigned int index;
+
+    if (!s_check_rem_and_log(in_s, 12, "Reading SCARD_GET_STATUS_CHANGE(1)"))
+    {
+        send_get_status_change_return(scard_client, 0,
+                                      XSCARD_F_INTERNAL_ERROR, 0, NULL);
+        rv = 1;
+        goto done;
+    }
+
+    in_uint32_le(in_s, hContext);
+    in_uint32_le(in_s, dwTimeout);
+    in_uint32_le(in_s, cReaders);
+    if (cReaders > 0)
+    {
+        rsa = (struct reader_state *) malloc(sizeof(rsa[0]) * cReaders);
+        str_lengths = (unsigned int *)malloc(sizeof(unsigned int) * cReaders);
+        if (rsa == NULL || str_lengths == NULL)
+        {
+            send_get_status_change_return(scard_client, 0,
+                                          XSCARD_E_NO_MEMORY, 0, NULL);
+            goto done;
+        }
+    }
+
+    if (!s_check_rem_and_log(in_s, cReaders * 52,
+                             "Reading SCARD_GET_STATUS_CHANGE(2)"))
+    {
+        send_get_status_change_return(scard_client, 0,
+                                      XSCARD_F_INTERNAL_ERROR, 0, NULL);
+        rv = 1;
+        goto done;
+    }
+
+    // Read all the reader state variables (apart from the names)
+    for (index = 0; index < cReaders; index++)
+    {
+        in_uint32_le(in_s, str_lengths[index]);
+        str_space += str_lengths[index];
+        in_uint32_le(in_s, rsa[index].dwCurrentState);
+        in_uint32_le(in_s, rsa[index].dwEventState);
+        in_uint32_le(in_s, rsa[index].cbAtr);
+        in_uint8a(in_s, rsa[index].rgbAtr, 36);
+    }
+
+    if (!s_check_rem_and_log(in_s, str_space,
+                             "Reading SCARD_GET_STATUS_CHANGE(3)"))
+    {
+        send_get_status_change_return(scard_client, 0,
+                                      XSCARD_F_INTERNAL_ERROR, 0, NULL);
+        rv = 1;
+        goto done;
+    }
+
+    // Now read the reader names
+    for (index = 0; index < cReaders; index++)
+    {
+        if (str_lengths[index] == 0)
+        {
+            rsa[index].szReader = NULL;
+        }
+        else
+        {
+            in_uint8p(in_s,  rsa[index].szReader, str_lengths[index]);
+        }
+    }
+
+    scard_send_get_status_change(scard_client,
+                                 send_get_status_change_return, 0,
+                                 hContext, dwTimeout, cReaders, rsa);
+done:
+    free(rsa);
+    free(str_lengths);
+    return rv;
+}
+
 /*****************************************************************************/
 /* returns error */
 int
@@ -1162,143 +1296,6 @@ static int g_ms2pc[] = { PC_SCARD_UNKNOWN, PC_SCARD_ABSENT,
                        };
 #endif
 
-/*****************************************************************************/
-/* returns error */
-int
-scard_process_get_status_change(struct trans *con, struct stream *in_s)
-{
-    int index;
-    int hContext;
-    int dwTimeout;
-    int cReaders;
-    READER_STATE *rsa;
-    struct pcsc_uds_client *uds_client;
-    void *user_data = 0;
-    struct pcsc_context *lcontext;
-
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_get_status_change:");
-    uds_client = (struct pcsc_uds_client *) (con->callback_data);
-    in_uint32_le(in_s, hContext);
-    in_uint32_le(in_s, dwTimeout);
-    in_uint32_le(in_s, cReaders);
-    if ((cReaders < 0) || (cReaders > 16))
-    {
-        LOG(LOG_LEVEL_ERROR, "scard_process_get_status_change: bad cReaders %d", cReaders);
-        return 1;
-    }
-    rsa = (READER_STATE *) g_malloc(sizeof(READER_STATE) * cReaders, 1);
-
-    for (index = 0; index < cReaders; index++)
-    {
-        in_uint8a(in_s, rsa[index].reader_name, 100);
-        LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_get_status_change: reader_name %s",
-                  rsa[index].reader_name);
-        in_uint32_le(in_s, rsa[index].current_state);
-        LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_get_status_change: current_state %d",
-                  rsa[index].current_state);
-        in_uint32_le(in_s, rsa[index].event_state);
-        LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_get_status_change: event_state %d",
-                  rsa[index].event_state);
-        in_uint32_le(in_s, rsa[index].atr_len);
-        LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_get_status_change: atr_len %d",
-                  rsa[index].atr_len);
-        in_uint8a(in_s, rsa[index].atr, 36);
-    }
-
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_get_status_change: hContext 0x%8.8x dwTimeout "
-              "%d cReaders %d", hContext, dwTimeout, cReaders);
-
-    //user_data = (void *) (tintptr) (uds_client->uds_client_id);
-    lcontext = get_pcsc_context_by_app_context(uds_client, hContext);
-    if (lcontext == 0)
-    {
-        LOG(LOG_LEVEL_ERROR, "scard_process_get_status_change: "
-            "get_pcsc_context_by_app_context failed");
-        g_free(rsa);
-        return 1;
-    }
-    scard_send_get_status_change(user_data,
-                                 lcontext->context.pbContext,
-                                 lcontext->context.cbContext,
-                                 1, dwTimeout, cReaders, rsa);
-    g_free(rsa);
-
-    return 0;
-}
-
-/*****************************************************************************/
-int
-scard_function_get_status_change_return(void *user_data,
-                                        struct stream *in_s,
-                                        int len, int status)
-{
-    int bytes;
-    int index;
-    int cReaders;
-    tui32 current_state;
-    tui32 event_state;
-    tui32 atr_len; /* number of bytes in atr[] */
-    tui8 atr[36];
-    struct stream *out_s;
-    int uds_client_id;
-    struct pcsc_uds_client *uds_client;
-    struct trans *con;
-
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_function_get_status_change_return:");
-    LOG_DEVEL(LOG_LEVEL_DEBUG, "  status 0x%8.8x", status);
-    uds_client_id = (int) (tintptr) user_data;
-    uds_client = (struct pcsc_uds_client *)
-                 get_uds_client_by_id(uds_client_id);
-    if (uds_client == 0)
-    {
-        LOG(LOG_LEVEL_ERROR, "scard_function_get_status_change_return: "
-            "get_uds_client_by_id failed to find uds_client_id %d",
-            uds_client_id);
-        return 1;
-    }
-    con = uds_client->con;
-
-    out_s = trans_get_out_s(con, 8192);
-    if (out_s == NULL)
-    {
-        return 1;
-    }
-    s_push_layer(out_s, iso_hdr, 8);
-    if (status != 0)
-    {
-        out_uint32_le(out_s, 0); /* cReaders */
-        out_uint32_le(out_s, status); /* XSCARD_S_SUCCESS status */
-    }
-    else
-    {
-        in_uint8s(in_s, 28);
-        in_uint32_le(in_s, cReaders);
-        LOG_DEVEL(LOG_LEVEL_DEBUG, "  cReaders %d", cReaders);
-        out_uint32_le(out_s, cReaders);
-        if (cReaders > 0)
-        {
-            for (index = 0; index < cReaders; index++)
-            {
-                in_uint32_le(in_s, current_state);
-                out_uint32_le(out_s, current_state);
-                in_uint32_le(in_s, event_state);
-                out_uint32_le(out_s, event_state);
-                in_uint32_le(in_s, atr_len);
-                out_uint32_le(out_s, atr_len);
-                in_uint8a(in_s, atr, 36);
-                out_uint8a(out_s, atr, 36);
-            }
-        }
-        out_uint32_le(out_s, status); /* XSCARD_S_SUCCESS status */
-    }
-
-    s_mark_end(out_s);
-    bytes = (int) (out_s->end - out_s->data);
-    s_pop_layer(out_s, iso_hdr);
-    out_uint32_le(out_s, bytes - 8);
-    out_uint32_le(out_s, SCARD_ESTABLISH_CONTEXT);
-    return trans_force_write(con);
-}
 
 /*****************************************************************************/
 /* returns error */

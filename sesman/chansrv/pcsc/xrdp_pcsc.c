@@ -751,11 +751,7 @@ SCardGetStatusChange(SCARDCONTEXT hContext, DWORD dwTimeout,
     unsigned int index;
     int offset;
     int str_len;
-    LONG status;
-    int dwCurrentState;
-    int dwEventState;
-    int cbAtr;
-    char atr[36];
+    LONG ReturnCode;
 
     LLOGLN(10, ("SCardGetStatusChange:"));
     LLOGLN(10, ("  dwTimeout %d cReaders %d", (int)dwTimeout, (int)cReaders));
@@ -764,59 +760,66 @@ SCardGetStatusChange(SCARDCONTEXT hContext, DWORD dwTimeout,
         LLOGLN(0, ("SCardGetStatusChange: error, not connected"));
         return SCARD_F_INTERNAL_ERROR;
     }
-    msg = (char *) malloc(8192);
+
+    if (cReaders > 0 && rgReaderStates == NULL)
+    {
+        return SCARD_E_INVALID_PARAMETER;
+    }
+
+    // Calculate how much memory we need for the request
+    bytes = 64 + (cReaders * 64);
+    for (index = 0 ; index < cReaders; ++index)
+    {
+        if (rgReaderStates[index].szReader != NULL)
+        {
+            bytes += (strlen(rgReaderStates[index].szReader) + 1);
+        }
+    }
+    if ((msg = (char *) malloc(bytes)) == NULL)
+    {
+        return SCARD_E_NO_MEMORY;
+    }
     SET_UINT32(msg, 0, hContext);
     SET_UINT32(msg, 4, dwTimeout);
     SET_UINT32(msg, 8, cReaders);
     offset = 12;
-    for (index = 0; index < cReaders; index++)
+    for (index = 0; index < cReaders; ++index)
     {
-        rgReaderStates[index].dwCurrentState &= ~2;
-        rgReaderStates[index].dwEventState &= ~2;
         rname = rgReaderStates[index].szReader;
-        if (strcmp(rname, "\\\\?PnP?\\Notification") == 0)
-        {
-            LLOGLN(10, ("  \\\\?PnP?\\Notification present"));
-            dwCurrentState = 0;
-            dwEventState = 0;
-            cbAtr = 0;
-            memset(atr, 0, 36);
-        }
-        else
-        {
-            dwCurrentState = rgReaderStates[index].dwCurrentState;
-            dwEventState = rgReaderStates[index].dwEventState;
-            cbAtr = rgReaderStates[index].cbAtr;
-            memset(atr, 0, 36);
-            memcpy(atr, rgReaderStates[index].rgbAtr, 33);
-        }
-        str_len = strlen(rname);
-        str_len = LMIN(str_len, 99);
-        memset(msg + offset, 0, 100);
-        memcpy(msg + offset, rname, str_len);
-        LLOGLN(10, ("  in szReader       %s", rname));
-        offset += 100;
-        LLOGLN(10, ("  in dwCurrentState 0x%8.8x", dwCurrentState));
-        SET_UINT32(msg, offset, dwCurrentState);
+
+        str_len = rname == NULL ? 0 : strlen(rname);
+        SET_UINT32(msg, offset, str_len);
         offset += 4;
-        LLOGLN(10, ("  in dwEventState   0x%8.8x", dwEventState));
-        SET_UINT32(msg, offset, dwEventState);
+        SET_UINT32(msg, offset, rgReaderStates[index].dwCurrentState);
         offset += 4;
-        LLOGLN(10, ("  in cbAtr          %d", cbAtr));
-        SET_UINT32(msg, offset, cbAtr);
+        SET_UINT32(msg, offset, rgReaderStates[index].dwEventState);
         offset += 4;
-        memcpy(msg + offset, atr, 36);
+        SET_UINT32(msg, offset, rgReaderStates[index].cbAtr);
+        offset += 4;
+        memcpy(msg + offset, rgReaderStates[index].rgbAtr, 36);
         offset += 36;
     }
+    // Now copy the reader names
+    for (index = 0; index < cReaders; ++index)
+    {
+        rname = rgReaderStates[index].szReader;
+        if (rname != NULL)
+        {
+            unsigned int len = strlen(rname) + 1;
+            memcpy(msg + offset, rname, len);
+            offset += len;
+        }
+    }
+
     if (send_message(SCARD_GET_STATUS_CHANGE, msg, offset) != 0)
     {
         LLOGLN(0, ("SCardGetStatusChange: error, send_message"));
         free(msg);
         return SCARD_F_INTERNAL_ERROR;
     }
-    bytes = 8192;
+    bytes = offset; // Return message is always smaller
     code = SCARD_GET_STATUS_CHANGE;
-    if (get_message(&code, msg, &bytes) != 0)
+    if (get_message(&code, msg, &bytes) != 0 || bytes < 8)
     {
         LLOGLN(0, ("SCardGetStatusChange: error, get_message"));
         free(msg);
@@ -828,56 +831,29 @@ SCardGetStatusChange(SCARDCONTEXT hContext, DWORD dwTimeout,
         free(msg);
         return SCARD_F_INTERNAL_ERROR;
     }
-    cReaders = GET_UINT32(msg, 0);
-    offset = 4;
-    LLOGLN(10, ("SCardGetStatusChange: got back cReaders %d", (int)cReaders));
+    ReturnCode = GET_UINT32(msg, 0);
+    cReaders = GET_UINT32(msg, 4);
+    offset = 8;
+    if (bytes < offset + 48 * cReaders)
+    {
+        LLOGLN(0, ("SCardGetStatusChange: error, bad length"));
+        free(msg);
+        return SCARD_F_INTERNAL_ERROR;
+    }
+
     for (index = 0; index < cReaders; index++)
     {
-        rname = rgReaderStates[index].szReader;
-#if 1
-        if (strcmp(rname, "\\\\?PnP?\\Notification") == 0)
-        {
-            LLOGLN(10, ("  out szReader       %s", rgReaderStates[index].szReader));
-            dwCurrentState = GET_UINT32(msg, offset);
-            rgReaderStates[index].dwCurrentState = dwCurrentState;
-            offset += 4;
-            LLOGLN(10, ("  out dwCurrentState 0x%8.8x", dwCurrentState));
-            // disable PnP for now
-            dwEventState = 4; // GET_UINT32(msg, offset);
-            rgReaderStates[index].dwEventState = dwEventState;
-            offset += 4;
-            LLOGLN(10, ("  out dwEventState   0x%8.8x", dwEventState));
-            cbAtr = GET_UINT32(msg, offset);
-            rgReaderStates[index].cbAtr = cbAtr;
-            offset += 4;
-            LLOGLN(10, ("  out cbAtr          %d", cbAtr));
-            memcpy(rgReaderStates[index].rgbAtr, msg + offset, 33);
-            offset += 36;
-        }
-        else
-#endif
-        {
-            LLOGLN(10, ("  out szReader       %s", rgReaderStates[index].szReader));
-            dwCurrentState = GET_UINT32(msg, offset);
-            rgReaderStates[index].dwCurrentState = dwCurrentState;
-            offset += 4;
-            LLOGLN(10, ("  out dwCurrentState 0x%8.8x", dwCurrentState));
-            dwEventState = GET_UINT32(msg, offset);
-            rgReaderStates[index].dwEventState = dwEventState;
-            offset += 4;
-            LLOGLN(10, ("  out dwEventState   0x%8.8x", dwEventState));
-            cbAtr = GET_UINT32(msg, offset);
-            rgReaderStates[index].cbAtr = cbAtr;
-            offset += 4;
-            LLOGLN(10, ("  out cbAtr          %d", cbAtr));
-            memcpy(rgReaderStates[index].rgbAtr, msg + offset, 33);
-            offset += 36;
-        }
+        rgReaderStates[index].dwCurrentState = GET_UINT32(msg + offset, 0);
+        offset += 4;
+        rgReaderStates[index].dwEventState = GET_UINT32(msg + offset, 0);
+        offset += 4;
+        rgReaderStates[index].cbAtr = GET_UINT32(msg + offset, 0);
+        offset += 4;
+        memcpy(rgReaderStates[index].rgbAtr, msg + offset, 36);
     }
-    status = GET_UINT32(msg, offset);
-    offset += 4;
+
     free(msg);
-    return status;
+    return ReturnCode;
 }
 
 /*****************************************************************************/
