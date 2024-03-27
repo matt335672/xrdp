@@ -158,16 +158,13 @@ struct common_call_private
  */
 enum common_context_code
 {
-    CCLR_IS_VALID_CONTEXT,
-    CCLR_CANCEL
+    CCLR_IS_VALID_CONTEXT
 };
 
 /**
  * Use this struct to make any one of these calls which
  * share the same parameter/ and result:-
- * 1) release context
- * 2) is valid context
- * 3) cancel
+ * 1) is valid context
  *
  * Fill in all fields (apart from p) and pass to
  * scard_send_common_context_long_return(). The result will be received
@@ -252,7 +249,7 @@ scard_send_establish_context(struct scard_client *client,
  * @param client client
  * @param callback How to be notified of the result
  * @param closure Additional state info for the caller
- * @param dwScope call parameter
+ * @param app_context call parameter
  */
 void
 scard_send_release_context(struct scard_client *client,
@@ -449,7 +446,21 @@ scard_send_get_status_change(struct scard_client *client,
                              const struct reader_state *rgReaderStates);
 
 /**
- * Sends a is valid context / cancel call to the RDP client
+ * Sends a cancel to the RDP client ([MS-RDPESC] 2.2.2.2)
+ *
+ * @param client client
+ * @param callback How to be notified of the result
+ * @param closure Additional state info for the caller
+ * @param app_context call parameter
+ */
+void
+scard_send_cancel(struct scard_client *client,
+                  long_return_cb_t callback,
+                  intptr_t closure,
+                  unsigned int app_context);
+
+/**
+ * Sends a is valid context call to the RDP client
  *
  * @param client client
  * @param call_data Info about the call

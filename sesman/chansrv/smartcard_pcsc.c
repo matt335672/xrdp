@@ -533,14 +533,6 @@ send_is_valid_context_return(struct scard_client *client,
 }
 
 /*****************************************************************************/
-static int
-send_cancel_return(struct scard_client *client,
-                   unsigned int ReturnCode)
-{
-    return send_long_return(client, SCARD_CANCEL, ReturnCode);
-}
-
-/*****************************************************************************/
 /* returns error */
 int
 scard_process_common_context_long_return(struct trans *con,
@@ -560,11 +552,8 @@ scard_process_common_context_long_return(struct trans *con,
     /* Which callback are we using for this function? */
     switch (code)
     {
-        case CCLR_IS_VALID_CONTEXT:
-            callback = send_is_valid_context_return;
-            break;
         default:
-            callback = send_cancel_return;
+            callback = send_is_valid_context_return;
     }
 
     if (!s_check_rem_and_log(in_s, 4, "Reading SCARD CONTEXT"))
@@ -1261,6 +1250,45 @@ done:
 }
 
 /*****************************************************************************/
+static int
+send_cancel_return(struct scard_client *client,
+                   intptr_t closure,
+                   unsigned int ReturnCode)
+{
+    return send_long_return(client, SCARD_CANCEL, ReturnCode);
+}
+
+/*****************************************************************************/
+int
+scard_process_cancel(struct trans *con, struct stream *in_s)
+{
+    int rv = 0;
+    struct pcsc_uds_client *uds_client;
+    struct scard_client *scard_client;
+
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_cancel:");
+    uds_client = (struct pcsc_uds_client *) (con->callback_data);
+    scard_client = uds_client->scard_client;
+
+    if (!s_check_rem_and_log(in_s, 4, "Reading SCARD_CANCEL"))
+    {
+        send_cancel_return(scard_client, 0, XSCARD_F_INTERNAL_ERROR);
+        rv = 1;
+    }
+    else
+    {
+        unsigned int app_context;
+        in_uint32_le(in_s, app_context);
+
+        scard_send_cancel(scard_client,
+                          send_cancel_return,
+                          0,
+                          app_context);
+    }
+    return rv;
+}
+
+/*****************************************************************************/
 /* returns error */
 int
 scard_function_get_attrib_return(void *user_data,
@@ -1369,8 +1397,7 @@ scard_process_msg(struct trans *con, struct stream *in_s, int command)
 
         case SCARD_CANCEL:
             LOG_DEVEL(LOG_LEVEL_INFO, "scard_process_msg: SCARD_CANCEL");
-            rv = scard_process_common_context_long_return(
-                     con, in_s, CCLR_CANCEL);
+            rv = scard_process_cancel(con, in_s);
             break;
 
         case SCARD_CANCEL_TRANSACTION:

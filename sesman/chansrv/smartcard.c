@@ -2000,6 +2000,69 @@ scard_send_get_status_change(struct scard_client *client,
     }
 }
 
+/*****************************************************************************/
+void
+scard_send_cancel(struct scard_client *client,
+                  long_return_cb_t callback,
+                  intptr_t closure,
+                  unsigned int app_context)
+{
+    struct redir_scardcontext Context;
+    /* Get the RDP-level context */
+    if (!scdata_lookup_context_mapping(client, app_context, &Context))
+    {
+        callback(client, closure, XSCARD_E_INVALID_HANDLE);
+    }
+    else
+    {
+        struct stream *s;
+
+        s = alloc_irp_and_ioctl(scdata_get_client_id(client),
+                                (void *)callback,
+                                closure,
+                                scard_function_long_return,
+                                0,
+                                SCARD_IOCTL_CANCEL, 64);
+
+        if (s == NULL)
+        {
+            LOG(LOG_LEVEL_ERROR, "system out of memory");
+            callback(client, closure, XSCARD_E_NO_MEMORY);
+        }
+        else
+        {
+            /* see [MS-RDPESC] 3.1.4.2 */
+
+            unsigned int ref_id = REFERENT_ID_BASE; /* Next referent ID */
+            int            bytes;
+
+            s_push_layer(s, mcs_hdr, 4); /* bytes, set later */
+            out_uint32_le(s, 0x00000000);
+            out_redir_scardcontext_part1(s, &Context, &ref_id);
+            out_redir_scardcontext_part2(s, &Context);
+
+            out_align_s(s, 8); // [MS-RPCE] 2.2.6.2 */
+            s_mark_end(s);
+
+            s_pop_layer(s, mcs_hdr);
+            bytes = (int) (s->end - s->p);
+            bytes -= 8;
+            out_uint32_le(s, bytes);
+
+            s_pop_layer(s, iso_hdr);
+            bytes = (int) (s->end - s->p);
+            bytes -= 28;
+            out_uint32_le(s, bytes);
+
+            bytes = (int) (s->end - s->data);
+
+            /* send to client */
+            send_channel_data(g_rdpdr_chan_id, s->data, bytes);
+            free_stream(s);
+        }
+    }
+}
+
 /**
  * Sends one of several calls which take a context and return a uint32_t
  *****************************************************************************/
@@ -2030,10 +2093,6 @@ scard_send_common_context_long_return(
         {
             case CCLR_IS_VALID_CONTEXT:
                 ioctl = SCARD_IOCTL_IS_VALID_CONTEXT;
-                break;
-
-            case CCLR_CANCEL:
-                ioctl = SCARD_IOCTL_CANCEL;
                 break;
 
             default:
