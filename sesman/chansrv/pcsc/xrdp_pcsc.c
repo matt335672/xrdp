@@ -1166,7 +1166,7 @@ PCSC_API LONG
 SCardListReaders(SCARDCONTEXT hContext, /* @unused */ LPCSTR mszGroups,
                  LPSTR mszReaders, LPDWORD pcchReaders)
 {
-    char msg[8192];
+    char msg[256];
     unsigned int code;
     unsigned int bytes;
     unsigned int offset;
@@ -1209,7 +1209,7 @@ SCardListReaders(SCARDCONTEXT hContext, /* @unused */ LPCSTR mszGroups,
 
     bytes = sizeof(msg);
     code = SCARD_LIST_READERS;
-    if (get_message(&code, msg, &bytes) != 0)
+    if (get_message(&code, msg, &bytes) != 0 || bytes < 8)
     {
         LLOGLN(0, ("SCardListReaders: error, get_message"));
         return SCARD_F_INTERNAL_ERROR;
@@ -1249,6 +1249,11 @@ SCardListReaders(SCARDCONTEXT hContext, /* @unused */ LPCSTR mszGroups,
         {
             ReturnCode = SCARD_E_INSUFFICIENT_BUFFER;
         }
+        else if ((bytes - offset) < cBytes)
+        {
+            LLOGLN(0, ("SCardListReaders: error, missing buffer"));
+            ReturnCode = SCARD_F_INTERNAL_ERROR;
+        }
         else
         {
             memcpy(mszReaders, msg + offset, cBytes);
@@ -1284,13 +1289,102 @@ PCSC_API LONG
 SCardGetAttrib(SCARDHANDLE hCard, DWORD dwAttrId, LPBYTE pbAttr,
                LPDWORD pcbAttrLen)
 {
+    char msg[256];
+    unsigned int code;
+    unsigned int bytes;
+    unsigned int offset;
+    LONG ReturnCode;
+    unsigned int fpbAttrIsNULL = (pbAttr == NULL);
+    unsigned int cbAttrLen;
+
     LLOGLN(0, ("SCardGetAttrib:"));
     if (g_sck == -1)
     {
         LLOGLN(0, ("SCardGetAttrib: error, not connected"));
         return SCARD_F_INTERNAL_ERROR;
     }
-    return SCARD_S_SUCCESS;
+
+    if (pcbAttrLen == NULL)
+    {
+        return SCARD_E_INVALID_PARAMETER;
+    }
+
+    if (*pcbAttrLen == SCARD_AUTOALLOCATE && fpbAttrIsNULL)
+    {
+        return SCARD_E_INVALID_PARAMETER;
+    }
+
+    offset = 0;
+    SET_UINT32(msg, offset, hCard);
+    offset += 4;
+    SET_UINT32(msg, offset, dwAttrId);
+    offset += 4;
+    SET_UINT32(msg, offset, fpbAttrIsNULL);
+    offset += 4;
+    SET_UINT32(msg, offset, *pcbAttrLen);
+    offset += 4;
+
+    if (send_message(SCARD_GET_ATTRIB, msg, offset) != 0)
+    {
+        LLOGLN(0, ("SCardGetAttrib: error, send_message"));
+        return SCARD_F_INTERNAL_ERROR;
+    }
+
+    bytes = sizeof(msg);
+    code = SCARD_GET_ATTRIB;
+    if (get_message(&code, msg, &bytes) != 0 || bytes < 8)
+    {
+        LLOGLN(0, ("SCardGetAttrib: error, get_message"));
+        return SCARD_F_INTERNAL_ERROR;
+    }
+    if (code != SCARD_GET_ATTRIB)
+    {
+        LLOGLN(0, ("SCardGetAttrib: error, bad code"));
+        return SCARD_F_INTERNAL_ERROR;
+    }
+    offset = 0;
+    ReturnCode = GET_UINT32(msg, offset);
+    LLOGLN(10, ("SCardListReaders: status 0x%8.8x", (int)ReturnCode));
+    offset += 4;
+    cbAttrLen = GET_UINT32(msg, offset);
+    offset += 4;
+
+    if (ReturnCode == SCARD_S_SUCCESS)
+    {
+        // auto-allocate memory, if the user has requested it
+        if (*pcbAttrLen == SCARD_AUTOALLOCATE)
+        {
+            LPBYTE attr_out;
+            if ((attr_out = (LPBYTE)malloc(cbAttrLen)) == NULL)
+            {
+                return SCARD_E_NO_MEMORY;
+            }
+            *(LPBYTE *)pbAttr = attr_out; // Pass pointer to  user
+            pbAttr = attr_out; // Use pointer ourselves
+            *pcbAttrLen = cbAttrLen;
+        }
+
+        if (fpbAttrIsNULL)
+        {
+            // Do nothing - user wants length
+        }
+        else if (*pcbAttrLen < cbAttrLen)
+        {
+            ReturnCode = SCARD_E_INSUFFICIENT_BUFFER;
+        }
+        else if ((bytes - offset) < cbAttrLen)
+        {
+            LLOGLN(0, ("SCardGetAttrib: error, missing buffer"));
+            ReturnCode = SCARD_F_INTERNAL_ERROR;
+        }
+        else
+        {
+            memcpy(pbAttr, msg + offset, cbAttrLen);
+        }
+        *pcbAttrLen = cbAttrLen;
+    }
+
+    return ReturnCode;
 }
 
 /*****************************************************************************/

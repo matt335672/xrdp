@@ -242,6 +242,12 @@ scard_function_get_status_change_return(struct scard_client *client,
                                         unsigned int len, unsigned int status);
 
 static int
+scard_function_get_attrib_return(struct scard_client *client,
+                                 struct sc_call_data *call_data,
+                                 struct stream *in_s,
+                                 unsigned int len, unsigned int status);
+
+static int
 scard_function_common_context_return(struct scard_client *client,
                                      void *vcall_data, struct stream *in_s,
                                      unsigned int len, unsigned int status);
@@ -2063,6 +2069,131 @@ scard_send_cancel(struct scard_client *client,
     }
 }
 
+/*****************************************************************************/
+void
+scard_send_get_attrib(struct scard_client *client,
+                      get_attrib_cb_t callback,
+                      intptr_t closure,
+                      unsigned int app_hcard,
+                      unsigned int dwAttrId,
+                      unsigned int fpbAttrIsNULL,
+                      unsigned int cbAttrLen)
+{
+    struct redir_scardhandle hCard;
+
+    /* Get the RDP-level context */
+    if (!scdata_lookup_card_mapping(client, app_hcard, &hCard))
+    {
+        callback(client, closure, XSCARD_E_INVALID_HANDLE, 0, NULL);
+    }
+    else
+    {
+        struct stream *s;
+
+        s = alloc_irp_and_ioctl(scdata_get_client_id(client),
+                                (void *)callback,
+                                closure,
+                                scard_function_get_attrib_return,
+                                0,
+                                SCARD_IOCTL_GETATTRIB, 64);
+        if (s == NULL)
+        {
+            LOG(LOG_LEVEL_ERROR, "system out of memory");
+            callback(client, closure, XSCARD_E_NO_MEMORY, 0, NULL);
+        }
+        else
+        {
+            /* see [MS-RDPESC] 2.2.2.21
+             *
+             * IDL:-
+             *
+             * typedef struct _REDIR_SCARDCONTEXT {
+             *    [range(0,16)] unsigned long cbContext;
+             *    [unique] [size_is(cbContext)] byte *pbContext;
+             *    } REDIR_SCARDCONTEXT;
+             *
+             * typedef struct _REDIR_SCARDHANDLE {
+             *    REDIR_SCARDCONTEXT Context;
+             *    [range(0,16)] unsigned long cbHandle;
+             *    [size_is(cbHandle)] byte *pbHandle;
+             *    } REDIR_SCARDHANDLE;
+             *
+             * typedef struct _GetAttrib_Call {
+             *   REDIR_SCARDHANDLE hCard;
+             *   unsigned long dwAttrId;
+             *   long fpbAttrIsNULL;
+             *   unsigned long cbAttrLen;
+             *   } GetAttrib_Call;
+             *
+             * Type summary:-
+             * hCard.Context.cbContext  Unsigned 32-bit word
+             * hCard.Context.pbContext  Embedded full pointer to conformant
+             *                          array of bytes
+             * hCard.cbHandle  Unsigned 32-bit word
+             * hCard.pbHandle  Embedded full pointer to conformant
+             *                 array of bytes
+             * dwAttrId                 32-bit word
+             * fpAttrIsNULL             32-bit word
+             * cbAttrLen                32-bit word
+             *
+             * NDR:-
+             *
+             * Offset   Decription
+             * 0        hCard.Context.cbContext
+             * 4        hCard.Context.pbContext Referent Identifier
+             * 8        hCard.cbHandle
+             * 12       hCard.pbHandle Referent Identifier
+             * 16       dwAttrId
+             * 20       fpAttrIsNULL
+             * 24       cbAttrLen
+             * 28       length of context in bytes
+             * 32       Context data (up to 16 bytes)
+             * ??       length of handle in bytes
+             * ??       Handle data (up to 16 bytes)
+             */
+            int bytes;
+            unsigned int ref_id = REFERENT_ID_BASE; /* Next referent ID */
+
+            s_push_layer(s, mcs_hdr, 4); /* bytes, set later */
+            out_uint32_le(s, 0x00000000);
+
+            out_redir_scardhandle_part1(s, &hCard, &ref_id);
+
+            // unsigned long dwAttrId;
+            out_uint32_le(s, dwAttrId);
+            // long fpbAttrIsNULL;
+            out_uint32_le(s, fpbAttrIsNULL);
+            // unsigned long cbAttrLen;
+            out_uint32_le(s, cbAttrLen);
+
+            // Now add the data pointed to by the referents
+            out_redir_scardhandle_part2(s, &hCard);
+
+            out_align_s(s, 8); // [MS-RPCE] 2.2.6.2 */
+
+            s_mark_end(s);
+
+            s_pop_layer(s, mcs_hdr);
+            bytes = (int) (s->end - s->p);
+            bytes -= 8;
+            out_uint32_le(s, bytes);
+
+            s_pop_layer(s, iso_hdr);
+            bytes = (int) (s->end - s->p);
+            bytes -= 28;
+            out_uint32_le(s, bytes);
+
+            bytes = (int) (s->end - s->data);
+
+            LOG_DEVEL_HEXDUMP(LOG_LEVEL_TRACE, "", s->data, bytes);
+
+            /* send to client */
+            send_channel_data(g_rdpdr_chan_id, s->data, bytes);
+            free_stream(s);
+        }
+    }
+}
+
 /**
  * Sends one of several calls which take a context and return a uint32_t
  *****************************************************************************/
@@ -2574,6 +2705,10 @@ scard_function_long_return(struct scard_client *client,
 
             in_uint32_le(in_s, ReturnCode);
         }
+        else
+        {
+            ReturnCode = XSCARD_E_PROTO_MISMATCH;
+        }
         LOG_DEVEL(LOG_LEVEL_DEBUG,
                   "scard_function_long_return: result %d", ReturnCode);
     }
@@ -2616,7 +2751,11 @@ scard_function_release_context_return(struct scard_client *client,
 
     if (status == 0)
     {
-        if (s_check_rem_and_log(in_s, 8 + 8 + 4, "[MS-RDPESC] Long_Return"))
+        if (!s_check_rem_and_log(in_s, 8 + 8 + 4, "[MS-RDPESC] Long_Return"))
+        {
+            ReturnCode = XSCARD_E_PROTO_MISMATCH;
+        }
+        else
         {
             /* Skip headers, setting mcs_hdr to point to the NDR
              * constructed type header so we can use in_align_s() */
@@ -2685,8 +2824,12 @@ scard_function_list_readers_return(struct scard_client *client,
     {
         unsigned int cBytes = 0;
 
-        if (s_check_rem_and_log(in_s, 8 + 8 + 4 + 4 + 4 + 4,
-                                "[MS-RDPESC] ListReaders_return(1)"))
+        if (!s_check_rem_and_log(in_s, 8 + 8 + 4 + 4 + 4 + 4,
+                                 "[MS-RDPESC] ListReaders_return(1)"))
+        {
+            ReturnCode = XSCARD_E_PROTO_MISMATCH;
+        }
+        else
         {
             /* Skip headers, setting mcs_hdr to point to the NDR
              * constructed type header so we can use in_align_s() */
@@ -2698,8 +2841,12 @@ scard_function_list_readers_return(struct scard_client *client,
             in_uint8s(in_s, 4); // msz pointer Referent Identifier
             in_uint8s(in_s, 4); // copy of msz length
             // Get the length of the required UTF-8 string
-            if (s_check_rem_and_log(in_s, cBytes,
-                                    "[MS-RDPESC] ListReaders_return(2)"))
+            if (!s_check_rem_and_log(in_s, cBytes,
+                                     "[MS-RDPESC] ListReaders_return(2)"))
+            {
+                ReturnCode = XSCARD_E_PROTO_MISMATCH;
+            }
+            else
             {
                 utf8len = in_utf16_le_fixed_as_utf8_length(in_s, cBytes / 2);
             }
@@ -2811,6 +2958,7 @@ scard_function_connect_return(struct scard_client *client,
                              4,  // dwActiveProtocol
                              "[MS-RDPESC] Connect_Return(1)"))
     {
+        ReturnCode = XSCARD_E_PROTO_MISMATCH;
         goto done;
     }
     /* Skip headers, setting mcs_hdr to point to the NDR
@@ -2923,6 +3071,10 @@ scard_function_reconnect_return(struct scard_client *client,
         if (!s_check_rem_and_log(in_s, 8 + 8 + 4 + 4,
                                  "[MS-RDPESC] Reconnect_Return"))
         {
+            ReturnCode = XSCARD_E_PROTO_MISMATCH;
+        }
+        else
+        {
             /* Skip headers, setting mcs_hdr to point to the NDR
              * constructed type header so we can use in_align_s() */
             in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.1 */
@@ -3007,7 +3159,7 @@ scard_function_transmit_return(struct scard_client *client,
     if (!s_check_rem_and_log(in_s, 8 + 8 + 4 + 4 + 4 + 4,
                              "[MS-RDPESC] Transmit_Return"))
     {
-        ReturnCode = XSCARD_F_INTERNAL_ERROR;
+        ReturnCode = XSCARD_E_PROTO_MISMATCH;
         goto done;
     }
     /* Skip headers, setting mcs_hdr to point to the NDR
@@ -3025,7 +3177,7 @@ scard_function_transmit_return(struct scard_client *client,
         if (!s_check_rem_and_log(in_s, 4 + 4 + 4,
                                  "[MS-RDPESC] Transmit_Return(2)"))
         {
-            ReturnCode = XSCARD_F_INTERNAL_ERROR;
+            ReturnCode = XSCARD_E_PROTO_MISMATCH;
             goto done;
         }
         in_uint32_le(in_s, ioRecvPci.dwProtocol);
@@ -3040,7 +3192,7 @@ scard_function_transmit_return(struct scard_client *client,
         if (!s_check_rem_and_log(in_s, 4 + cbRecvLength,
                                  "[MS-RDPESC] Transmit_Return(2)"))
         {
-            ReturnCode = XSCARD_F_INTERNAL_ERROR;
+            ReturnCode = XSCARD_E_PROTO_MISMATCH;
             goto done;
         }
         in_uint8s(in_s, 4);
@@ -3052,7 +3204,7 @@ scard_function_transmit_return(struct scard_client *client,
         if (!s_check_rem_and_log(in_s, 4 + ioRecvPci.cbExtraBytes,
                                  "[MS-RDPESC] Transmit_Return(3)"))
         {
-            ReturnCode = XSCARD_F_INTERNAL_ERROR;
+            ReturnCode = XSCARD_E_PROTO_MISMATCH;
             goto done;
         }
         in_uint8s(in_s, 4);
@@ -3116,7 +3268,7 @@ scard_function_control_return(struct scard_client *client,
     if (!s_check_rem_and_log(in_s, 8 + 8 + 4 + 4 + 4,
                              "[MS-RDPESC] Control_Return"))
     {
-        ReturnCode = XSCARD_F_INTERNAL_ERROR;
+        ReturnCode = XSCARD_E_PROTO_MISMATCH;
         goto done;
     }
     /* Skip headers, setting mcs_hdr to point to the NDR
@@ -3138,7 +3290,7 @@ scard_function_control_return(struct scard_client *client,
         if (!s_check_rem_and_log(in_s, 4 + cbOutBufferSize,
                                  "[MS-RDPESC] Control_Return(2)"))
         {
-            ReturnCode = XSCARD_F_INTERNAL_ERROR;
+            ReturnCode = XSCARD_E_PROTO_MISMATCH;
             goto done;
         }
         in_uint8s(in_s, 4);
@@ -3210,6 +3362,7 @@ scard_function_status_return(struct scard_client *client,
     if (!s_check_rem_and_log(in_s, 8 + 8 + 4 + 4 + 4 + 4 + 4 + 32 + 4,
                              "[MS-RDPESC] Status_Return(1)"))
     {
+        ReturnCode = XSCARD_E_PROTO_MISMATCH;
         goto done;
     }
     /* Skip headers, setting mcs_hdr to point to the NDR
@@ -3234,6 +3387,7 @@ scard_function_status_return(struct scard_client *client,
         if (!s_check_rem_and_log(in_s, 4 + cBytes,
                                  "[MS-RDPESC] Status_Return(2)"))
         {
+            ReturnCode = XSCARD_E_PROTO_MISMATCH;
             goto done;
         }
         in_uint8s(in_s, 4); // cBytes copy
@@ -3335,6 +3489,7 @@ scard_function_get_status_change_return(struct scard_client *client,
     if (!s_check_rem_and_log(in_s, 8 + 8 + 4 + 4 + 4,
                              "[MS-RDPESC] GetStatusChange_Return(1)"))
     {
+        ReturnCode = XSCARD_E_PROTO_MISMATCH;
         goto done;
     }
 
@@ -3352,6 +3507,7 @@ scard_function_get_status_change_return(struct scard_client *client,
         if (!s_check_rem_and_log(in_s, 48 * cReaders,
                                  "[MS-RDPESC] GetStatusChange_Return(2)"))
         {
+            ReturnCode = XSCARD_E_PROTO_MISMATCH;
             goto done;
         }
         rgReaderStates = (struct reader_state_return *)
@@ -3377,6 +3533,83 @@ done:
                        ReturnCode, cReaders, rgReaderStates);
     free(rgReaderStates);
     return rv;
+}
+
+
+/*****************************************************************************/
+static int
+scard_function_get_attrib_return(struct scard_client *client,
+                                 struct sc_call_data *call_data,
+                                 struct stream *in_s,
+                                 unsigned int len, unsigned int status)
+{
+    /* see [MS-RDPESC] 2.2.3.12
+     *
+     * IDL:-
+     *
+     * typedef struct _GetAttrib_Return {
+     *   long ReturnCode;
+     *   [range(0,65536)] unsigned long cbAttrLen;
+     *   [unique] [size_is(cbAttrLen)] byte *pbAttr;
+     *   } GetAttrib_Return;
+     *
+     * NDR:-
+     *
+     * Offset   Decription
+     * 0        ReturnCode
+     * 4        cbAttrLen
+     * 8        Referent Identifier for pbAttr (could be NULL)
+     * if (pbAttr != NULL)
+     * | 12     copy of cbAttrLen
+     * | 16     pbAttr
+     */
+
+    unsigned int ReturnCode = HRESULT_TO_SCARD_STATUS(status);
+
+    unsigned int cbAttrLen = 0;
+    unsigned int attr_ref;
+    const char *pbAttr = NULL;
+
+    get_attrib_cb_t user_callback = (get_attrib_cb_t)call_data->user_callback;
+
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_function_get_attrib_return:");
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "  status 0x%8.8x", status);
+
+    if (status != 0)
+    {
+        goto done;
+    }
+
+    if (!s_check_rem_and_log(in_s, 8 + 8 + 4 + 4,
+                             "[MS-RDPESC] GetAttrib_Return(1)"))
+    {
+        ReturnCode = XSCARD_E_PROTO_MISMATCH;
+        goto done;
+    }
+
+    /* Skip headers, setting mcs_hdr to point to the NDR
+     * constructed type header so we can use in_align_s() */
+    in_uint8s(in_s, 8); /* [MS-RPCE] 2.2.6.1 */
+    s_push_layer(in_s, mcs_hdr, 8); /* [MS-RPCE] 2.2.6.2 */
+
+    in_uint32_le(in_s, ReturnCode);
+    in_uint32_le(in_s, cbAttrLen);
+    in_uint32_le(in_s, attr_ref);
+    if (cbAttrLen > 0 && attr_ref != 0)
+    {
+        if (!s_check_rem_and_log(in_s, 4 + cbAttrLen,
+                                 "[MS-RDPESC] GetAttrib_Return(2)"))
+        {
+            ReturnCode = XSCARD_E_PROTO_MISMATCH;
+            goto done;
+        }
+        in_uint8s(in_s, 4);
+        in_uint8p(in_s, pbAttr, cbAttrLen);
+    }
+
+done:
+    return user_callback(client, call_data->closure,
+                         ReturnCode, cbAttrLen, pbAttr);
 }
 
 
@@ -3413,7 +3646,11 @@ scard_function_common_context_return(struct scard_client *client,
 
     if (status == 0)
     {
-        if (s_check_rem_and_log(in_s, 8 + 8 + 4, "[MS-RDPESC] Long_Return"))
+        if (!s_check_rem_and_log(in_s, 8 + 8 + 4, "[MS-RDPESC] Long_Return"))
+        {
+            ReturnCode = XSCARD_E_PROTO_MISMATCH;
+        }
+        else
         {
             /* Skip headers, setting mcs_hdr to point to the NDR
              * constructed type header so we can use in_align_s() */

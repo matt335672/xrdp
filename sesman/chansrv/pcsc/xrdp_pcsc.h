@@ -44,10 +44,9 @@ enum pcsc_message_code
     SCARD_STATUS              = 0x0B,
     SCARD_GET_STATUS_CHANGE   = 0x0C,
     SCARD_CANCEL              = 0x0D,
-    SCARD_CANCEL_TRANSACTION  = 0x0E,
-    SCARD_GET_ATTRIB          = 0x0F,
-    SCARD_SET_ATTRIB          = 0x10,
-    SCARD_IS_VALID_CONTEXT    = 0x11
+    SCARD_GET_ATTRIB          = 0x0E,
+    SCARD_SET_ATTRIB          = 0x0F,
+    SCARD_IS_VALID_CONTEXT    = 0x10
 };
 
 /*
@@ -282,7 +281,6 @@ enum pcsc_message_code
 // | xx+12 ATR
 // + xx+48 <reader-end>
 //
-//
 // *****************************************************************************
 //  C A N C E L
 // *****************************************************************************
@@ -295,6 +293,24 @@ enum pcsc_message_code
 // Offset Value
 // 0      Header, code SCARD_CANCEL
 // 8      ReturnCode
+//
+// *****************************************************************************
+//  G E T   A T T R I B
+// *****************************************************************************
+// Request (See [MS-RDPESC] 2.2.2.21) :-
+// Offset Value
+// 0      Header, code SCARD_GET_ATTRIB
+// 8      hCard
+// 12     dwAttrId
+// 16     fpbAttrIsNULL
+// 20     cbAttrLen
+//
+// Response (See [MS-RDPESC] 2.2.3.12) :-
+// Offset Value
+// 0      Header, code SCARD_GET_ATTRIB
+// 8      ReturnCode
+// 12     cbAttrLen
+// 16     pbAttr (if fpbAttrIsNULL is not set)
 //
 
 #endif // XRDP_PCSC_H

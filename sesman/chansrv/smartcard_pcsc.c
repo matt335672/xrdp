@@ -1251,6 +1251,81 @@ done:
 
 /*****************************************************************************/
 static int
+send_get_attrib_return(struct scard_client *client,
+                       intptr_t closure,
+                       unsigned int ReturnCode,
+                       unsigned int cbAttrLen,
+                       const char *pbAttr)
+{
+    struct pcsc_uds_client *uds_client = GET_PCSC_CLIENT(client);
+    struct trans *con = uds_client->con;
+    unsigned int stream_size = 64;
+    if (cbAttrLen > 0 && pbAttr != NULL)
+    {
+        stream_size += cbAttrLen;
+    }
+    struct stream *out_s = trans_get_out_s(con, stream_size);
+    if (out_s == NULL)
+    {
+        return 1;
+    }
+
+    s_push_layer(out_s, iso_hdr, 8);
+    out_uint32_le(out_s, ReturnCode); /* XSCARD_S_SUCCESS status */
+    out_uint32_le(out_s, cbAttrLen); /* cReaders */
+    if (cbAttrLen > 0 && pbAttr != NULL)
+    {
+        out_uint8a(out_s, pbAttr, cbAttrLen);
+    }
+
+    s_mark_end(out_s);
+    unsigned int bytes = (unsigned int) (out_s->end - out_s->data);
+    s_pop_layer(out_s, iso_hdr);
+    out_uint32_le(out_s, bytes - 8);
+    out_uint32_le(out_s, SCARD_GET_STATUS_CHANGE);
+    return trans_force_write(con);
+}
+
+/*****************************************************************************/
+int
+scard_process_get_attrib(struct trans *con, struct stream *in_s)
+{
+    int rv = 0;
+    struct pcsc_uds_client *uds_client;
+    struct scard_client *scard_client;
+
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "scard_process_get_attrib:");
+    uds_client = (struct pcsc_uds_client *) (con->callback_data);
+    scard_client = uds_client->scard_client;
+
+    if (!s_check_rem_and_log(in_s, 4 + 4 + 4 + 4, "Reading SCARD_GET_ATTRIB"))
+    {
+        send_get_attrib_return(scard_client, 0,
+                               XSCARD_F_INTERNAL_ERROR, 0, NULL);
+        rv = 1;
+    }
+    else
+    {
+        unsigned int app_hcard;
+        unsigned int dwAttrId;
+        unsigned int fpAttrIsNULL;
+        unsigned int cbAttrLen;
+
+        in_uint32_le(in_s, app_hcard);
+        in_uint32_le(in_s, dwAttrId);
+        in_uint32_le(in_s, fpAttrIsNULL);
+        in_uint32_le(in_s, cbAttrLen);
+
+        scard_send_get_attrib(scard_client, send_get_attrib_return, 0,
+                              app_hcard, dwAttrId, fpAttrIsNULL, cbAttrLen);
+
+    }
+    return rv;
+}
+
+
+/*****************************************************************************/
+static int
 send_cancel_return(struct scard_client *client,
                    intptr_t closure,
                    unsigned int ReturnCode)
@@ -1286,16 +1361,6 @@ scard_process_cancel(struct trans *con, struct stream *in_s)
                           app_context);
     }
     return rv;
-}
-
-/*****************************************************************************/
-/* returns error */
-int
-scard_function_get_attrib_return(void *user_data,
-                                 struct stream *in_s,
-                                 int len, int status)
-{
-    return 0;
 }
 
 #if 0
@@ -1400,12 +1465,9 @@ scard_process_msg(struct trans *con, struct stream *in_s, int command)
             rv = scard_process_cancel(con, in_s);
             break;
 
-        case SCARD_CANCEL_TRANSACTION:
-            LOG_DEVEL(LOG_LEVEL_INFO, "scard_process_msg: SCARD_CANCEL_TRANSACTION");
-            break;
-
         case SCARD_GET_ATTRIB:
             LOG_DEVEL(LOG_LEVEL_INFO, "scard_process_msg: SCARD_GET_ATTRIB");
+            rv = scard_process_get_attrib(con, in_s);
             break;
 
         case SCARD_SET_ATTRIB:

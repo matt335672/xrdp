@@ -131,6 +131,12 @@ typedef int (*get_status_change_cb_t)(
     unsigned int cReaders,
     struct reader_state_return *rgReaderStates);
 
+typedef int (*get_attrib_cb_t)(struct scard_client *client,
+                               intptr_t closure,
+                               unsigned int ReturnCode,
+                               unsigned int cbAttrLen,
+                               const char *pbAttr);
+
 /*****************************************************************************/
 /* Structures used to hold call state while waiting for the
  * client to respond */
@@ -460,6 +466,24 @@ scard_send_cancel(struct scard_client *client,
                   unsigned int app_context);
 
 /**
+ * Sends a get_attrib to the RDP client ([MS-RDPESC] 2.2.2.21)
+ *
+ * @param client client
+ * @param callback How to be notified of the result
+ * @param closure Additional state info for the caller
+ * @param app_hcard call parameter
+ * @param app_hcard call parameter
+ */
+void
+scard_send_get_attrib(struct scard_client *client,
+                      get_attrib_cb_t callback,
+                      intptr_t closure,
+                      unsigned int app_hcard,
+                      unsigned int dwAttrId,
+                      unsigned int fpbAttrIsNULL,
+                      unsigned int cbAttrLen);
+
+/**
  * Sends a is valid context call to the RDP client
  *
  * @param client client
@@ -473,10 +497,6 @@ scard_send_common_context_long_return(
     struct scard_client *client,
     struct common_context_long_return_call *call_data);
 
-#if 0
-int  scard_send_get_attrib(void *user_data, char *card, int card_bytes,
-                           READER_STATE *rs);
-#endif
 /*
  * Notes:
  *      SCardTransmit - partially done
