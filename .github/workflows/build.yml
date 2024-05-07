@@ -161,7 +161,7 @@ jobs:
         run: make -j $(nproc)
       - name: unittests
         if: ${{ matrix.unittests }}
-        run: make check -j $(nproc) || (cat tests/common/test-suite.log && exit 1)
+        run: make check -j $(nproc) || (cat tests/*/test-suite.log && exit 1)
       - name: distcheck
         id: dist_check
         if: ${{ matrix.DISTCHECK }}
