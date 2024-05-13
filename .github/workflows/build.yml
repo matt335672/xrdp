@@ -70,6 +70,19 @@ jobs:
             CFLAGS: "-fsanitize=address -ggdb"
             LDFLAGS: "-fsanitize=address"
 
+          - CC: clang
+            feature_set: max
+            arch: amd64
+            os: ubuntu-latest
+            unittests: true
+            DISTCHECK: false
+            name_extra: and UndefinedBehaviorSanitized
+            # -fsanitize=nullability is only available for Clang
+            # TODO: enable alignment
+            CFLAGS: "-fsanitize=undefined -fsanitize=nullability -fno-sanitize=alignment -ggdb"
+            LDFLAGS: "-fsanitize=undefined -fsanitize=nullability -fno-sanitize=alignment"
+            UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1:report_error_type=1
+
           # Maximal debug 64-bit arch builds
           # Check we can also do a static build without
           # installing .a files
@@ -119,6 +132,7 @@ jobs:
       CC: ${{ matrix.CC }}
       CFLAGS: ${{ matrix.CFLAGS }}
       LDFLAGS: ${{ matrix.LDFLAGS }}
+      UBSAN_OPTIONS: ${{ matrix.UBSAN_OPTIONS }}
 
       # HACK (2020-11-16): github actions doesn't support YAML anchors/aliases to
       # avoid repeating long config values. So instead the config values are defined
