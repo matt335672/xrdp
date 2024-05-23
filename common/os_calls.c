@@ -154,6 +154,36 @@ g_init(const char *app_name)
 
     WSAStartup(2, &wsadata);
 #endif
+#if defined(XRDP_NVENC)
+    if (g_strcmp(app_name, "xrdp") == 0)
+    {
+        /* call cuInit() to initalize the nvidia drivers */
+        /* TODO create an issue on nvidia forums to figure out why we need to
+        *  do this */
+        if (g_fork() == 0)
+        {
+            typedef int (*cu_init_proc)(int flags);
+            cu_init_proc cu_init;
+            long lib;
+            char cuda_lib_name[] = "libcuda.so";
+            char cuda_func_name[] = "cuInit";
+
+            lib = g_load_library(cuda_lib_name);
+            if (lib != 0)
+            {
+                cu_init = (cu_init_proc)
+                          g_get_proc_address(lib, cuda_func_name);
+                if (cu_init != NULL)
+                {
+                    cu_init(0);
+                }
+            }
+            log_end();
+            g_deinit();
+            g_exit(0);
+        }
+    }
+#endif
 }
 
 /*****************************************************************************/
@@ -1528,6 +1558,39 @@ g_sck_send_fd_set(int sck, const void *ptr, unsigned int len,
 #endif /* !WIN32 */
 
     return rv;
+}
+
+/******************************************************************************/
+int
+g_alloc_shm_map_fd(void **addr, int *fd, size_t size)
+{
+    int lfd = -1;
+    void *laddr;
+    char name[128];
+    static unsigned int autoinc;
+
+    snprintf(name, 128, "/%8.8X%8.8X", getpid(), autoinc++);
+    lfd = shm_open(name, O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+    if (lfd == -1)
+    {
+        return 1;
+    }
+    shm_unlink(name);
+    if (ftruncate(lfd, size) == -1)
+    {
+        close(lfd);
+        return 2;
+    }
+    /* map fd to address space */
+    laddr = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, lfd, 0);
+    if (laddr == MAP_FAILED)
+    {
+        close(lfd);
+        return 3;
+    }
+    *addr = laddr;
+    *fd = lfd;
+    return 0;
 }
 
 /*****************************************************************************/

@@ -175,6 +175,12 @@ AC_ARG_ENABLE(x264, AS_HELP_STRING([--enable-x264],
               [Use x264 library (default: no)]),
               [], [enable_x264=no])
 AM_CONDITIONAL(XRDP_X264, [test x$enable_x264 = xyes])
+AC_ARG_ENABLE(nvenc, AS_HELP_STRING([--enable-nvenc],
+              [Use nvenc library (default: no), env vars XRDP_NVENC_CFLAGS and
+               XRDP_NVENC_LIBS should be set if used]),
+              [], [enable_nvenc=no])
+AM_CONDITIONAL(XRDP_NVENC, [test x$enable_nvenc = xyes])
+AM_CONDITIONAL(XRDP_YAMI, [test x$enable_yami = xyes])
 AC_ARG_ENABLE(painter, AS_HELP_STRING([--disable-painter],
               [Do not use included painter library (default: no)]),
               [], [enable_painter=yes])
@@ -258,6 +264,9 @@ AC_CHECK_HEADER([security/_pam_types.h],
                 [AC_DEFINE([HAVE__PAM_TYPES_H], 1, [Using Linux-PAM], [])])
 AC_CHECK_HEADER([security/pam_constants.h],
                 [AC_DEFINE([HAVE_PAM_CONSTANTS_H], 1, [Using OpenPAM], [])])
+
+# shm_open may not be in the C library
+AC_SEARCH_LIBS([shm_open], [rt])
 
 # Find imlib2
 case "$with_imlib2" in
@@ -493,6 +502,18 @@ AS_IF( [test "x$enable_pixman" = "xyes"] , [PKG_CHECK_MODULES(PIXMAN, pixman-1 >
 
 AS_IF( [test "x$enable_x264" = "xyes"] , [PKG_CHECK_MODULES(XRDP_X264, x264 >= 0.3.0)] )
 
+if test "x$enable_nvenc" = "xyes"
+then
+if test ! -z "$XRDP_NVENC_CFLAGS"
+then
+  AC_SUBST(XRDP_NVENC_CFLAGS, ["$XRDP_NVENC_CFLAGS"])
+fi
+if test ! -z "$XRDP_NVENC_LIBS"
+then
+  AC_SUBST(XRDP_NVENC_LIBS, ["$XRDP_NVENC_LIBS"])
+fi
+fi
+
 # checking for TurboJPEG
 if test "x$enable_tjpeg" = "xyes"
 then
@@ -653,6 +674,8 @@ AC_CONFIG_FILES([
   xup/Makefile
   third_party/Makefile
   third_party/tomlc99/Makefile
+  xrdp_accel_assist/Makefile
+
 ])
 
 AC_REQUIRE_AUX_FILE([tap-driver.sh])
@@ -668,6 +691,7 @@ echo "  jpeg                    $enable_jpeg"
 echo "  turbo jpeg              $enable_tjpeg"
 echo "  rfxcodec                $enable_rfxcodec"
 echo "  x264                    $enable_x264"
+echo "  nvenc                   $enable_nvenc"
 echo "  painter                 $enable_painter"
 echo "  pixman                  $enable_pixman"
 echo "  fuse                    $enable_fuse"

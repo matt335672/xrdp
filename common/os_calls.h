@@ -124,6 +124,7 @@ int      g_sck_recv_fd_set(int sck, void *ptr, unsigned int len,
  */
 int      g_sck_send_fd_set(int sck, const void *ptr, unsigned int len,
                            int fds[], unsigned int fdcount);
+int      g_alloc_shm_map_fd(void **addr, int *fd, size_t size);
 int      g_sck_last_error_would_block(int sck);
 int      g_sck_socket_ok(int sck);
 /**
