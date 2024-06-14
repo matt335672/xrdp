@@ -457,20 +457,32 @@ struct xrdp_key_info
  *
  * Each section maps an RDP scancode to a KeySym and a Unicode
  * character.
+ *
+ * The pause key is presented as E1 1D. This is the only code
+ * in the E1 range, so we map it to 256. All other codes end
+ * up mapped as 0..127 (not extended) or 128..255 (extended)
  */
-#define INDEX_FROM_SCANCODE(scancode,extended) \
-    (((scancode) & 0x7f) | ((extended) ? 0x80 : 0))
+#define MAX_INDEX_FROM_SCANCODE 256
+
+#define INDEX_FROM_SCANCODE_OK(scancode, extended, extended1) \
+    (((extended1) == 0) || ((scancode) == 0x1d))
+
+#define INDEX_FROM_SCANCODE(scancode, extended, extended1) \
+    ( \
+      ((extended1) && ((scancode) == 0x1d)) ? 256 \
+      : ((scancode) & 0x7f) | ((extended) ? 0x80 : 0) \
+    )
 
 struct xrdp_keymap
 {
-    struct xrdp_key_info keys_noshift[256];
-    struct xrdp_key_info keys_shift[256];
-    struct xrdp_key_info keys_altgr[256];
-    struct xrdp_key_info keys_shiftaltgr[256];
-    struct xrdp_key_info keys_capslock[256];
-    struct xrdp_key_info keys_capslockaltgr[256];
-    struct xrdp_key_info keys_shiftcapslock[256];
-    struct xrdp_key_info keys_shiftcapslockaltgr[256];
+    struct xrdp_key_info keys_noshift[MAX_INDEX_FROM_SCANCODE + 1];
+    struct xrdp_key_info keys_shift[MAX_INDEX_FROM_SCANCODE + 1];
+    struct xrdp_key_info keys_altgr[MAX_INDEX_FROM_SCANCODE + 1];
+    struct xrdp_key_info keys_shiftaltgr[MAX_INDEX_FROM_SCANCODE + 1];
+    struct xrdp_key_info keys_capslock[MAX_INDEX_FROM_SCANCODE + 1];
+    struct xrdp_key_info keys_capslockaltgr[MAX_INDEX_FROM_SCANCODE + 1];
+    struct xrdp_key_info keys_shiftcapslock[MAX_INDEX_FROM_SCANCODE + 1];
+    struct xrdp_key_info keys_shiftcapslockaltgr[MAX_INDEX_FROM_SCANCODE + 1];
     // NumLock is restricted to a much smaller set of keys
     struct xrdp_key_info keys_numlock[XR_RDP_SCAN_MAX_NUMLOCK -
                                           XR_RDP_SCAN_MIN_NUMLOCK + 1];
@@ -559,6 +571,9 @@ struct xrdp_wm
     int caps_lock;
     int scroll_lock;
     int num_lock;
+    int ignore_next_numlock; // Used by pause key processing
+    /* keyboard input */
+
     /* Unicode input */
     int last_high_surrogate_key_up;
     int last_high_surrogate_key_down;

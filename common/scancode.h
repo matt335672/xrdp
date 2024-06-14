@@ -39,11 +39,14 @@
 #if !defined(SCANCODE_H)
 #define SCANCODE_H
 
+#define SCANCODE_PAUSE_KEY 0x21d  /* E1 1D */
+
 /**
  * Looks up an RDP scancode
  *
  * @param scancode Scancode. Extended scancodes have bit 9 set
- *                 (i.e. are in 0x100 - 0x1ff)
+ *                 (i.e. are in 0x100 - 0x1ff). The pause key
+ *                 is a special, outside this range.
  *  @return keycode, or 0 for no keycode
  */
 unsigned short

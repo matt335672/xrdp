@@ -1592,6 +1592,29 @@ xrdp_wm_key(struct xrdp_wm *self, int device_flags, int scan_code)
         return 0;
     }
 
+    /* [MS-RDPBCGR] 2.2.8.1.1.3.1.1.1 A pause is sent as :-
+     * 1) scancode=0x1d, (device_flags & KBDFLAGS_EXTENDED1) != 0, WM_KEYDOWN
+     * 2) scancode=0x45, WM_KEYDOWN
+     * 3) scancode=0x1d, (device_flags & KBDFLAGS_EXTENDED1) != 0, WM_KEYUP
+     * 4) scancode=0x45, WM_KEYUP
+     *
+     * We handle this by ignoring 0x45 (numlock) scancodes immediately
+     * after events with KBDFLAGS_EXTENDED1 set. The module needs to
+     * map the KBDFLAGS_EXTENDED1 press to the pause key.
+     */
+    if ((device_flags & KBD_FLAG_EXT1) != 0)
+    {
+        self->ignore_next_numlock = 1;
+    }
+    else if (self->ignore_next_numlock)
+    {
+        self->ignore_next_numlock = 0;
+        if (scan_code == 69)
+        {
+            return 0;
+        }
+    }
+
     if (device_flags & KBD_FLAG_UP) /* 0x8000 */
     {
         self->keys[scan_code] = 0;

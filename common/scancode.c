@@ -167,7 +167,8 @@ static const struct scancode_to_keycode
     { 0x165, 225 }, //   VK_BROWSER_SEARCH    I225 (KEY_SEARCH)
     { 0x166, 164 }, //   VK_BROWSER_FAVORITES I164 (KEY_BOOKMARKS)
     { 0x16b, 165 }, //   VK_LAUNCH_APP1       I165 (KEY_COMPUTER)
-    { 0x16c, 163 }  //   VK_LAUNCH_MAIL       I163 (KEY_MAIL)
+    { 0x16c, 163 }, //   VK_LAUNCH_MAIL       I163 (KEY_MAIL)
+    { 0x21d, 127 }  //   VK_PAUSE             PAUS (KEY_PAUSE)
 };
 
 // Sources:-
@@ -291,7 +292,8 @@ static const struct scancode_to_keycode
     { 0x153, 107 }, //   VK_DELETE            DELE
     { 0x15b, 115 }, //   VK_LWIN              LWIN
     { 0x15c, 116 }, //   VK_RWIN              RWIN
-    { 0x15d, 117 }  //   VK_APPS              COMP
+    { 0x15d, 117 }, //   VK_APPS              COMP
+    { 0x21d, 110 }  //   VK_PAUSE             PAUS
 };
 
 struct map_settings
