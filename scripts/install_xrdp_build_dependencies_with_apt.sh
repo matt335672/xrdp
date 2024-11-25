@@ -74,6 +74,7 @@ case "$ARCH"
 in
     amd64)
         PACKAGES_AMD64_MIN=" \
+            libepoxy-dev \
             libpam0g-dev \
             libssl-dev \
             libx11-dev \
