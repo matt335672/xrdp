@@ -204,7 +204,8 @@ static Atom g_targets_atom = 0;        /* TARGETS */
 static Atom g_primary_atom = 0;        /* PRIMARY */
 static Atom g_secondary_atom = 0;      /* SECONDARY */
 static Atom g_get_time_atom = 0;       /* XRDP_GET_TIME_ATOM */
-static Atom g_utf8_atom = 0;           /* UTF8_STRING */
+static Atom g_utf8_atom1 = 0;          /* UTF8_STRING */
+static Atom g_utf8_atom2 = 0;          /* text/plain;charset=utf-8 */
 static Atom g_image_bmp_atom = 0;      /* image/bmp */
 static Atom g_file_atom1 = 0;          /* text/uri-list */
 static Atom g_file_atom2 = 0;          /* x-special/gnome-copied-files */
@@ -389,7 +390,8 @@ clipboard_init(void)
         g_multiple_atom = XInternAtom(g_display, "MULTIPLE", False);
         g_primary_atom = XInternAtom(g_display, "PRIMARY", False);
         g_secondary_atom = XInternAtom(g_display, "SECONDARY", False);
-        g_utf8_atom = XInternAtom(g_display, "UTF8_STRING", False);
+        g_utf8_atom1 = XInternAtom(g_display, "UTF8_STRING", False);
+        g_utf8_atom2 = XInternAtom(g_display, "text/plain;charset=utf-8", False);
 
         g_image_bmp_atom = XInternAtom(g_display, "image/bmp", False);
         g_file_atom1 = XInternAtom(g_display, "text/uri-list", False);
@@ -1066,7 +1068,8 @@ clipboard_process_data_request(struct stream *s, int clip_msg_status,
             else
             {
                 LOG_DEVEL(LOG_LEVEL_DEBUG, "clipboard_process_data_request: CB_FORMAT_FILE_GROUP_DESCRIPTOR, "
-                          "calling XConvertSelection to g_utf8_atom");
+                          "calling XConvertSelection to %s",
+                          get_atom_text(g_clip_s2c.type));
                 g_clip_s2c.xrdp_clip_type = XRDP_CB_FILE;
                 XConvertSelection(g_display, g_clipboard_atom, g_clip_s2c.type,
                                   g_clip_property_atom, g_wnd, CurrentTime);
@@ -1098,9 +1101,9 @@ clipboard_process_data_request(struct stream *s, int clip_msg_status,
             else
             {
                 LOG_DEVEL(LOG_LEVEL_DEBUG, "clipboard_process_data_request: CF_UNICODETEXT, "
-                          "calling XConvertSelection to g_utf8_atom");
+                          "calling XConvertSelection to UTF8_STRING");
                 g_clip_s2c.xrdp_clip_type = XRDP_CB_TEXT;
-                XConvertSelection(g_display, g_clipboard_atom, g_utf8_atom,
+                XConvertSelection(g_display, g_clipboard_atom, g_utf8_atom1,
                                   g_clip_property_atom, g_wnd, CurrentTime);
             }
             break;
@@ -1228,7 +1231,8 @@ clipboard_process_data_response_for_file(struct stream *s,
                                     "file://");
     }
     else if ((g_clip_c2s.type == XA_STRING) ||
-             (g_clip_c2s.type == g_utf8_atom))
+             (g_clip_c2s.type == g_utf8_atom1) ||
+             (g_clip_c2s.type == g_utf8_atom2))
     {
         if (g_cfg->use_nautilus3_flist_format)
         {
@@ -1776,9 +1780,9 @@ clipboard_event_selection_notify(XEvent *xevent)
                                   atom, get_atom_text(atom), XA_STRING);
                         LOG_DEVEL(LOG_LEVEL_DEBUG, "clipboard_event_selection_notify: 0x%lx %s",
                                   atom, get_atom_text(atom));
-                        if (atom == g_utf8_atom)
+                        if (atom == g_utf8_atom1 || atom == g_utf8_atom2)
                         {
-                            got_utf8 = 1;
+                            got_utf8 = atom;
                         }
                         else if (atom == XA_STRING)
                         {
@@ -1806,10 +1810,11 @@ clipboard_event_selection_notify(XEvent *xevent)
                               "should be type[%ld], fmt[%d]", type, fmt, XA_ATOM, 32);
                 }
             }
-            else if (lxevent->target == g_utf8_atom)
+            else if (lxevent->target == g_utf8_atom1 || lxevent->target == g_utf8_atom2)
             {
-                LOG_DEVEL(LOG_LEVEL_DEBUG, "clipboard_event_selection_notify: UTF8_STRING "
-                          "data_size %d", data_size);
+                LOG_DEVEL(LOG_LEVEL_DEBUG, "clipboard_event_selection_notify:"
+                          " %s data_size %d", get_atom_text(lxevent->target),
+                          data_size);
                 if ((g_clip_s2c.incr_in_progress == 0) && (data_size > 0))
                 {
                     g_free(g_clip_s2c.data);
@@ -1980,9 +1985,9 @@ clipboard_event_selection_notify(XEvent *xevent)
         }
 
     }
-    else if (got_utf8)
+    else if (got_utf8 != 0)
     {
-
+        /* UTF8_STRING or text/plain;charset=utf-8 */
         if (g_cfg->restrict_outbound_clipboard & CLIP_RESTRICT_TEXT)
         {
             LOG(LOG_LEVEL_DEBUG,
@@ -1990,7 +1995,7 @@ clipboard_event_selection_notify(XEvent *xevent)
         }
         else
         {
-            g_clip_s2c.type = g_utf8_atom;
+            g_clip_s2c.type = got_utf8;
             g_clip_s2c.xrdp_clip_type = XRDP_CB_TEXT;
             g_clip_s2c.converted = 0;
             g_clip_s2c.clip_time = lxevent->time;
@@ -2120,7 +2125,9 @@ clipboard_event_selection_request(XEvent *xevent)
             {
                 atom_buf[atom_count] = XA_STRING;
                 atom_count++;
-                atom_buf[atom_count] = g_utf8_atom;
+                atom_buf[atom_count] = g_utf8_atom1;
+                atom_count++;
+                atom_buf[atom_count] = g_utf8_atom2;
                 atom_count++;
             }
         }
@@ -2173,7 +2180,8 @@ clipboard_event_selection_request(XEvent *xevent)
             g_free(xdata);
         }
     }
-    else if ((lxev->target == XA_STRING) || (lxev->target == g_utf8_atom))
+    else if ((lxev->target == XA_STRING) || (lxev->target == g_utf8_atom1) ||
+             (lxev->target == g_utf8_atom2))
     {
         if (clipboard_find_format_id(g_file_group_descriptor_format_id) >= 0)
         {
@@ -2184,7 +2192,7 @@ clipboard_event_selection_request(XEvent *xevent)
             {
                 LOG(LOG_LEVEL_DEBUG,
                     "inbound clipboard %s is restricted because of config",
-                    lxev->target == XA_STRING ? "XA_STRING" : "UTF8_STRING");
+                    get_atom_text(lxev->target));
                 clipboard_refuse_selection(lxev);
             }
             else
@@ -2471,7 +2479,8 @@ clipboard_event_property_notify(XEvent *xevent)
                                              g_clip_s2c.total_bytes - 14);
             }
             else if ((g_clip_s2c.type == XA_STRING) ||
-                     (g_clip_s2c.type == g_utf8_atom))
+                     (g_clip_s2c.type == g_utf8_atom1) ||
+                     (g_clip_s2c.type == g_utf8_atom2))
             {
                 g_clip_s2c.xrdp_clip_type = XRDP_CB_TEXT;
                 clipboard_send_data_response(g_clip_s2c.xrdp_clip_type,
