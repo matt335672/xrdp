@@ -209,6 +209,7 @@ static Atom g_utf8_atom2 = 0;          /* text/plain;charset=utf-8 */
 static Atom g_image_bmp_atom = 0;      /* image/bmp */
 static Atom g_file_atom1 = 0;          /* text/uri-list */
 static Atom g_file_atom2 = 0;          /* x-special/gnome-copied-files */
+static Atom g_html_atom = 0;           /* text/html */
 static Atom g_incr_atom = 0;           /* INCR */
 
 static Window g_wnd = 0;
@@ -242,8 +243,9 @@ static int g_cliprdr_flags = CB_USE_LONG_FORMAT_NAMES |
 static int g_formatIds[MAX_FORMAT_IDS];
 static int g_num_formatIds = 0;
 
-/* Format ID assigned to "FileGroupDescriptorW" by the client */
-static int g_file_group_descriptor_format_id = -1;
+/* Dynamic Format IDs assigned by the client */
+static int g_file_group_descriptor_format_id = -1; // FileGroupDescriptorW
+static int g_html_format_id = -1; // HTML Format
 
 static char g_last_atom_name[256] = "";
 
@@ -400,6 +402,7 @@ clipboard_init(void)
         g_image_bmp_atom = XInternAtom(g_display, "image/bmp", False);
         g_file_atom1 = XInternAtom(g_display, "text/uri-list", False);
         g_file_atom2 = XInternAtom(g_display, "x-special/gnome-copied-files", False);
+        g_html_atom = XInternAtom(g_display, "text/html", False);
         g_incr_atom = XInternAtom(g_display, "INCR", False);
 
         if (g_image_bmp_atom == None)
@@ -962,6 +965,10 @@ clipboard_process_format_announce(struct stream *s, int clip_msg_status,
         {
             g_file_group_descriptor_format_id = formatId;
         }
+        else if (g_strcmp(desc, "HTML Format") == 0)
+        {
+            g_html_format_id = formatId;
+        }
     }
 
     if ((g_num_formatIds > 0) &&
@@ -1280,6 +1287,109 @@ clipboard_process_data_response_for_file(struct stream *s,
 }
 
 /**************************************************************************//**
+ * Process a CB_FORMAT_DATA_RESPONSE for an X client requesting html
+ *
+ * @param s Stream containing CF_HTML object (see MS "HTML Clipboard Format")
+ * @param clip_msg_status msgFlags from Clipboard PDU Header
+ * @param clip_msg_len dataLen from Clipboard PDU Header
+ *
+ * The CF_HTML object grammar is described online. It consists of a header and
+ * some HTML. An example is given below:-
+ *
+ * Version:0.9
+ * StartHTML:00000160
+ * EndHTML:00000434
+ * StartFragment:00000194
+ * EndFragment:00000398
+ * SourceURL:https://freecomputerbooks.com/UNIX-Sockets-FAQ.html
+ * <html><body>
+ * <!--StartFragment--><li><b>Title</b> Programming UNIX Sockets in C - Frequently Asked Questions   </li>
+ * <li><b>Author(s)</b> Vic Metcalfe, Andrew Gierth and other contributers  </li>
+ * <li><b>Publisher:</b> sbin.org  </li><!--EndFragment-->
+ * </body>
+ * </html>
+ *
+ * The StartFragment and EndFragment fields in the header point to the
+ * HTML between the <!--StartFragment--> and <!--EndFragment--> comments.
+ *
+ * @return Status
+ */
+static int
+clipboard_process_data_response_for_html(struct stream *s,
+        int clip_msg_status,
+        int clip_msg_len)
+{
+    XSelectionRequestEvent *lxev = &g_saved_selection_req_event;
+    unsigned int start_pos = 0;
+    unsigned int end_pos = 0;
+    unsigned int byte_count = 0;
+
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "clipboard_process_data_response_for_html: ");
+
+    g_free(g_clip_c2s.data);
+    g_clip_c2s.data = NULL;
+    g_clip_c2s.total_bytes = 0;
+
+    if (clip_msg_len > 0)
+    {
+
+        /* Find the HTML Fragment in the object */
+
+        /* Replace the last character in the stream with a terminator so we
+         * can use strstr to look for StartFragment: and EndFragment:
+         */
+        char last_char = s->p[clip_msg_len - 1];
+        s->p[clip_msg_len - 1] = '\0';
+
+        const char *start_frag_ptr = g_strstr(s->p, "StartFragment:");
+        const char *end_frag_ptr = g_strstr(s->p, "EndFragment:");
+        s->p[clip_msg_len - 1] = last_char;
+
+        if (start_frag_ptr != NULL && end_frag_ptr != NULL)
+        {
+            start_pos = g_atoi(start_frag_ptr + 14);
+            end_pos = g_atoi(end_frag_ptr + 12);
+            if (start_pos > 0 && start_pos < end_pos &&
+                    end_pos < (unsigned int)clip_msg_len)
+            {
+                byte_count = end_pos - start_pos + 1; // Need terminator
+            }
+        }
+    }
+
+    // Allocate memory, if required
+    if (byte_count == 0)
+    {
+        LOG(LOG_LEVEL_ERROR, "Got badly formed HTML fragment from client");
+    }
+    else
+    {
+        if ((g_clip_c2s.data = (char *)g_malloc(byte_count, 0)) == NULL)
+        {
+            LOG(LOG_LEVEL_ERROR,
+                "Can't allocate %u bytes for html clip response",
+                byte_count);
+            byte_count = 0;
+        }
+    }
+
+    if (byte_count == 0)
+    {
+        clipboard_refuse_selection(lxev);
+    }
+    else
+    {
+        in_uint8s(s, start_pos);
+        in_uint8a(s, g_clip_c2s.data, byte_count - 1);
+        g_clip_c2s.data[byte_count - 1] = '\0';
+        g_clip_c2s.total_bytes = byte_count;
+        g_clip_c2s.read_bytes_done = byte_count;
+        clipboard_provide_selection_c2s(lxev, lxev->target);
+    }
+    return 0;
+}
+
+/**************************************************************************//**
  * Process a CB_FORMAT_DATA_RESPONSE for an X client requesting text
  *
  * @param s Stream containing CLIPRDR_FILELIST ([MS-RDPECLIP])
@@ -1363,6 +1473,11 @@ clipboard_process_data_response(struct stream *s, int clip_msg_status,
     else if (g_clip_c2s.xrdp_clip_type == XRDP_CB_FILE)
     {
         clipboard_process_data_response_for_file(s, clip_msg_status,
+                clip_msg_len);
+    }
+    else if (g_clip_c2s.xrdp_clip_type == XRDP_CB_HTML)
+    {
+        clipboard_process_data_response_for_html(s, clip_msg_status,
                 clip_msg_len);
     }
     else
@@ -2077,6 +2192,13 @@ clipboard_event_selection_request(XEvent *xevent)
             atom_buf[atom_count] = g_file_atom2;
             atom_count++;
         }
+        if (clipboard_find_format_id(g_html_format_id) >= 0 &&
+                (g_cfg->restrict_inbound_clipboard & CLIP_RESTRICT_TEXT) == 0)
+        {
+            LOG_DEVEL(LOG_LEVEL_DEBUG, "  reporting text/html");
+            atom_buf[atom_count] = g_html_atom;
+            atom_count++;
+        }
         atom_buf[atom_count] = 0;
         LOG_DEVEL(LOG_LEVEL_DEBUG, "  reporting %d formats", atom_count);
         return clipboard_provide_selection(lxev, XA_ATOM, 32,
@@ -2270,6 +2392,33 @@ clipboard_event_selection_request(XEvent *xevent)
             clipboard_send_data_request(g_file_group_descriptor_format_id);
             return 0;
         }
+    }
+    else if (lxev->target == g_html_atom)
+    {
+        LOG_DEVEL(LOG_LEVEL_DEBUG,
+                  "clipboard_event_selection_request: g_html_atom");
+
+        if (g_cfg->restrict_inbound_clipboard & CLIP_RESTRICT_TEXT)
+        {
+            LOG(LOG_LEVEL_DEBUG, "inbound clipboard "
+                "text/html is restricted because of config");
+            clipboard_refuse_selection(lxev);
+        }
+        else if ((g_clip_c2s.type == lxev->target) && g_clip_c2s.converted)
+        {
+            LOG_DEVEL(LOG_LEVEL_DEBUG, "clipboard_event_selection_request:"
+                      " -------------------------------------------");
+            clipboard_provide_selection_c2s(lxev, lxev->target);
+        }
+        else
+        {
+            g_memcpy(&g_saved_selection_req_event, lxev,
+                     sizeof(g_saved_selection_req_event));
+            g_clip_c2s.type = g_html_atom;
+            g_clip_c2s.xrdp_clip_type = XRDP_CB_HTML;
+            clipboard_send_data_request(g_html_format_id);
+        }
+        return 0;
     }
     else
     {

@@ -30,6 +30,7 @@ enum xrdp_clip_type
     XRDP_CB_TEXT,
     XRDP_CB_BITMAP,
     XRDP_CB_FILE,
+    XRDP_CB_HTML,
 
     XRDP_CB_ARRLEN // Use for declaring arrays
 };
