@@ -23,9 +23,12 @@
 #include "parse.h"
 
 /* these are the supported general types */
-#define XRDP_CB_TEXT   1
-#define XRDP_CB_BITMAP 2
-#define XRDP_CB_FILE   3
+enum xrdp_clip_type
+{
+    XRDP_CB_TEXT  = 1,
+    XRDP_CB_BITMAP,
+    XRDP_CB_FILE
+};
 
 struct clip_s2c /* server to client, pasting from linux app to mstsc */
 {
@@ -34,7 +37,7 @@ struct clip_s2c /* server to client, pasting from linux app to mstsc */
     char *data;
     Atom type; /* UTF8_STRING, image/bmp, ... */
     Atom property; /* XRDP_CLIP_PROPERTY_ATOM, _QT_SELECTION, ... */
-    int xrdp_clip_type; /* XRDP_CB_TEXT, XRDP_CB_BITMAP, XRDP_CB_FILE, ... */
+    enum xrdp_clip_type xrdp_clip_type; /* XRDP_CB_TEXT, XRDP_CB_BITMAP, ... */
     int converted;
     Time clip_time;
 };
@@ -49,7 +52,7 @@ struct clip_c2s /* client to server, pasting from mstsc to linux app */
     Atom type; /* UTF8_STRING, image/bmp, ... */
     Atom property; /* XRDP_CLIP_PROPERTY_ATOM, _QT_SELECTION, ... */
     Window window; /* Window used in INCR transfer */
-    int xrdp_clip_type; /* XRDP_CB_TEXT, XRDP_CB_BITMAP, XRDP_CB_FILE, ... */
+    enum xrdp_clip_type xrdp_clip_type; /* XRDP_CB_TEXT, XRDP_CB_BITMAP, ... */
     int converted;
     int in_request; /* a data request has been sent to client */
 };

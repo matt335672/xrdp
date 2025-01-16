@@ -238,7 +238,8 @@ static int g_cliprdr_flags = CB_USE_LONG_FORMAT_NAMES |
 
 /* from client to server */
 /* last received CLIPRDR_FORMAT_LIST(CLIPRDR_FORMAT_ANNOUNCE) */
-static int g_formatIds[16];
+#define MAX_FORMAT_IDS 16
+static int g_formatIds[MAX_FORMAT_IDS];
 static int g_num_formatIds = 0;
 
 /* Format ID assigned to "FileGroupDescriptorW" by the client */
@@ -973,17 +974,21 @@ clipboard_process_format_announce(struct stream *s, int clip_msg_status,
             desc[15] = 0;
             clip_msg_len -= 32;
         }
-        LOG_DEVEL(LOG_LEVEL_DEBUG, "clipboard_process_format_announce: formatId 0x%8.8x "
-                  "wszFormatName [%s] clip_msg_len %d", formatId, desc,
-                  clip_msg_len);
-        if (g_num_formatIds <= 15)
+        if (g_num_formatIds < MAX_FORMAT_IDS)
         {
+            LOG(LOG_LEVEL_DEBUG,
+                "clipboard_process_format_announce: added "
+                "formatId 0x%8.8x wszFormatName [%s] clip_msg_len %d",
+                formatId, desc, clip_msg_len);
             g_formatIds[g_num_formatIds] = formatId;
             g_num_formatIds++;
         }
-        if (g_num_formatIds > 15)
+        else
         {
-            LOG_DEVEL(LOG_LEVEL_DEBUG, "clipboard_process_format_announce: max formats");
+            LOG(LOG_LEVEL_WARNING,
+                "clipboard_process_format_announce: ignored "
+                "formatId 0x%8.8x wszFormatName [%s]",
+                formatId, desc);
         }
 
         /* format id for file copy copy is dynamic and announced by the
