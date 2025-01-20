@@ -1700,6 +1700,136 @@ clipboard_get_window_property(Window wnd, Atom prop, Atom *type, int *fmt,
 }
 
 /*****************************************************************************/
+/** Process an X11 clipboard formats announcement
+ * @param lxevent XSelectionEvent containing announcement
+ * @param atoms Formats being announced
+ * @param n_items Number of formats in list.
+ * @return Error (!= 0)
+ */
+static int
+process_x11_formats_announce(const XSelectionEvent *lxevent,
+                             const Atom atoms[],
+                             unsigned int n_items)
+{
+    Atom got_string = None;
+    Atom got_utf8 = None;
+    Atom got_bmp_image = None;
+    Atom got_file_atom = None;
+    int rv = 0;
+
+    unsigned int index;
+    for (index = 0; index < n_items; index++)
+    {
+        Atom atom = atoms[index];
+        LOG_DEVEL(LOG_LEVEL_DEBUG,
+                  "clipboard_event_selection_notify: 0x%lx %s 0x%lx",
+                  atom, get_atom_text(atom), XA_STRING);
+        LOG_DEVEL(LOG_LEVEL_DEBUG, "clipboard_event_selection_notify: 0x%lx %s",
+                  atom, get_atom_text(atom));
+        if (atom == g_utf8_atom1 || atom == g_utf8_atom2)
+        {
+            got_utf8 = atom;
+        }
+        else if (atom == XA_STRING)
+        {
+            got_string = atom;
+        }
+        else if (atom == g_image_bmp_atom)
+        {
+            got_bmp_image = atom;
+        }
+        else if ((atom == g_file_atom1) || (atom == g_file_atom2))
+        {
+            got_file_atom = atom;
+        }
+        else
+        {
+            LOG_DEVEL(LOG_LEVEL_ERROR, "process_x11_formats_announce: "
+                      "unknown atom %s", get_atom_text(atom));
+        }
+    }
+
+    if (got_file_atom != None)
+    {
+        /* text/uri-list or x-special/gnome-copied-files */
+
+        if (g_cfg->restrict_outbound_clipboard & CLIP_RESTRICT_FILE)
+        {
+            LOG(LOG_LEVEL_DEBUG,
+                "outbound clipboard(file) is restricted because of config");
+        }
+        else
+        {
+            g_clip_s2c.type = got_file_atom;
+            g_clip_s2c.xrdp_clip_type = XRDP_CB_FILE;
+            g_clip_s2c.converted = 0;
+            g_clip_s2c.clip_time = lxevent->time;
+        }
+    }
+    else if (got_utf8 != 0)
+    {
+        /* UTF8_STRING or text/plain;charset=utf-8 */
+        if (g_cfg->restrict_outbound_clipboard & CLIP_RESTRICT_TEXT)
+        {
+            LOG(LOG_LEVEL_DEBUG,
+                "outbound clipboard(text) is restricted because of config");
+        }
+        else
+        {
+            g_clip_s2c.type = got_utf8;
+            g_clip_s2c.xrdp_clip_type = XRDP_CB_TEXT;
+            g_clip_s2c.converted = 0;
+            g_clip_s2c.clip_time = lxevent->time;
+        }
+    }
+    else if (got_string)
+    {
+
+        /*
+         * In most cases, when copying text, TARGETS atom and UTF8_STRING atom exists,
+         * it means that this code block which checks STRING atom might not be never executed
+         * in recent platforms.
+         * Use echo foo | xclip -selection clipboard -noutf8 to reproduce it.
+         */
+        if (g_cfg->restrict_outbound_clipboard & CLIP_RESTRICT_TEXT)
+        {
+            LOG(LOG_LEVEL_DEBUG,
+                "outbound clipboard(text) is restricted because of config");
+        }
+        else
+        {
+            g_clip_s2c.type = XA_STRING;
+            g_clip_s2c.xrdp_clip_type = XRDP_CB_TEXT;
+            g_clip_s2c.converted = 0;
+            g_clip_s2c.clip_time = lxevent->time;
+        }
+    }
+    else if (got_bmp_image)
+    {
+        if (g_cfg->restrict_outbound_clipboard & CLIP_RESTRICT_IMAGE)
+        {
+            LOG(LOG_LEVEL_DEBUG,
+                "outbound clipboard(image) is restricted because of config");
+        }
+        else
+        {
+            g_clip_s2c.type = g_image_bmp_atom;
+            g_clip_s2c.xrdp_clip_type = XRDP_CB_BITMAP;
+            g_clip_s2c.converted = 0;
+            g_clip_s2c.clip_time = lxevent->time;
+        }
+
+    }
+
+    if (clipboard_send_format_announce(g_clip_s2c.xrdp_clip_type) != 0)
+    {
+        rv = 4;
+    }
+
+    return rv;
+}
+
+/*****************************************************************************/
 /* returns error
    process the SelectionNotify X event, uses XSelectionEvent
    typedef struct {
@@ -1722,25 +1852,12 @@ clipboard_event_selection_notify(XEvent *xevent)
     int n_items;
     int fmt;
     int rv;
-    int index;
-    int got_string;
-    int got_utf8;
-    int got_bmp_image;
-    int send_format_announce;
-    Atom got_file_atom;
-    Atom atom;
-    Atom *atoms;
     Atom type;
 
     LOG_DEVEL(LOG_LEVEL_DEBUG, "clipboard_event_selection_notify:");
     data_size = 0;
     n_items = 0;
     fmt = 0;
-    got_string = 0;
-    got_utf8 = 0;
-    got_bmp_image = 0;
-    got_file_atom = 0;
-    send_format_announce = 0;
     rv = 0;
     data = 0;
     type = 0;
@@ -1798,37 +1915,8 @@ clipboard_event_selection_notify(XEvent *xevent)
                 /* 32 implies long */
                 if ((type == XA_ATOM) && (fmt == 32))
                 {
-                    atoms = (Atom *)data;
-                    for (index = 0; index < n_items; index++)
-                    {
-                        atom = atoms[index];
-                        LOG_DEVEL(LOG_LEVEL_DEBUG,
-                                  "clipboard_event_selection_notify: 0x%lx %s 0x%lx",
-                                  atom, get_atom_text(atom), XA_STRING);
-                        LOG_DEVEL(LOG_LEVEL_DEBUG, "clipboard_event_selection_notify: 0x%lx %s",
-                                  atom, get_atom_text(atom));
-                        if (atom == g_utf8_atom1 || atom == g_utf8_atom2)
-                        {
-                            got_utf8 = atom;
-                        }
-                        else if (atom == XA_STRING)
-                        {
-                            got_string = 1;
-                        }
-                        else if (atom == g_image_bmp_atom)
-                        {
-                            got_bmp_image = 1;
-                        }
-                        else if ((atom == g_file_atom1) || (atom == g_file_atom2))
-                        {
-                            LOG_DEVEL(LOG_LEVEL_DEBUG, "clipboard_event_selection_notify: file");
-                            got_file_atom = atom;
-                        }
-                        else
-                        {
-                            LOG_DEVEL(LOG_LEVEL_ERROR, "clipboard_event_selection_notify: unknown atom 0x%lx", atom);
-                        }
-                    }
+                    rv = process_x11_formats_announce(lxevent,
+                                                      (Atom *)data, n_items);
                 }
                 else
                 {
@@ -1937,94 +2025,6 @@ clipboard_event_selection_notify(XEvent *xevent)
         {
             LOG_DEVEL(LOG_LEVEL_ERROR, "clipboard_event_selection_notify: "
                       "unknown selection");
-        }
-    }
-
-    if (got_file_atom != 0)
-    {
-        /* text/uri-list or x-special/gnome-copied-files */
-
-        if (g_cfg->restrict_outbound_clipboard & CLIP_RESTRICT_FILE)
-        {
-            LOG(LOG_LEVEL_DEBUG,
-                "outbound clipboard(file) is restricted because of config");
-        }
-        else
-        {
-            g_clip_s2c.type = got_file_atom;
-            g_clip_s2c.xrdp_clip_type = XRDP_CB_FILE;
-            g_clip_s2c.converted = 0;
-            g_clip_s2c.clip_time = lxevent->time;
-            send_format_announce = 1;
-        }
-
-    }
-    else if (got_utf8 != 0)
-    {
-        /* UTF8_STRING or text/plain;charset=utf-8 */
-        if (g_cfg->restrict_outbound_clipboard & CLIP_RESTRICT_TEXT)
-        {
-            LOG(LOG_LEVEL_DEBUG,
-                "outbound clipboard(text) is restricted because of config");
-        }
-        else
-        {
-            g_clip_s2c.type = got_utf8;
-            g_clip_s2c.xrdp_clip_type = XRDP_CB_TEXT;
-            g_clip_s2c.converted = 0;
-            g_clip_s2c.clip_time = lxevent->time;
-            send_format_announce = 1;
-        }
-
-    }
-    else if (got_string)
-    {
-
-        /*
-         * In most cases, when copying text, TARGETS atom and UTF8_STRING atom exists,
-         * it means that this code block which checks STRING atom might not be never executed
-         * in recent platforms.
-         * Use echo foo | xclip -selection clipboard -noutf8 to reproduce it.
-         */
-        if (g_cfg->restrict_outbound_clipboard & CLIP_RESTRICT_TEXT)
-        {
-            LOG(LOG_LEVEL_DEBUG,
-                "outbound clipboard(text) is restricted because of config");
-        }
-        else
-        {
-            g_clip_s2c.type = XA_STRING;
-            g_clip_s2c.xrdp_clip_type = XRDP_CB_TEXT;
-            g_clip_s2c.converted = 0;
-            g_clip_s2c.clip_time = lxevent->time;
-            send_format_announce = 1;
-        }
-
-    }
-    else if (got_bmp_image)
-    {
-
-        if (g_cfg->restrict_outbound_clipboard & CLIP_RESTRICT_IMAGE)
-        {
-            LOG(LOG_LEVEL_DEBUG,
-                "outbound clipboard(image) is restricted because of config");
-        }
-        else
-        {
-            g_clip_s2c.type = g_image_bmp_atom;
-            g_clip_s2c.xrdp_clip_type = XRDP_CB_BITMAP;
-            g_clip_s2c.converted = 0;
-            g_clip_s2c.clip_time = lxevent->time;
-            send_format_announce = 1;
-        }
-
-    }
-
-    if (send_format_announce)
-    {
-        if (clipboard_send_format_announce(g_clip_s2c.xrdp_clip_type) != 0)
-        {
-            rv = 4;
         }
     }
 
