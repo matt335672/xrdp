@@ -25,9 +25,13 @@
 /* these are the supported general types */
 enum xrdp_clip_type
 {
-    XRDP_CB_TEXT  = 1,
+    XRDP_CB_NONE = 0,
+
+    XRDP_CB_TEXT,
     XRDP_CB_BITMAP,
-    XRDP_CB_FILE
+    XRDP_CB_FILE,
+
+    XRDP_CB_ARRLEN // Use for declaring arrays
 };
 
 struct clip_s2c /* server to client, pasting from linux app to mstsc */
@@ -35,9 +39,13 @@ struct clip_s2c /* server to client, pasting from linux app to mstsc */
     int incr_in_progress;
     int total_bytes;
     char *data;
-    Atom type; /* UTF8_STRING, image/bmp, ... */
+    /// The different Atoms which can be requested from X11 clients
+    /// to satisfy an incoming client data request.
+    Atom x11_type[XRDP_CB_ARRLEN];
     Atom property; /* XRDP_CLIP_PROPERTY_ATOM, _QT_SELECTION, ... */
-    enum xrdp_clip_type xrdp_clip_type; /* XRDP_CB_TEXT, XRDP_CB_BITMAP, ... */
+    /// Clip type on clipboard, or in the process of being assembled
+    enum xrdp_clip_type xrdp_clip_type;
+    /// Whether the clipboard type is complete
     int converted;
     Time clip_time;
 };
