@@ -257,7 +257,8 @@ static char g_last_atom_name[256] = "";
 
 enum
 {
-    CB_FORMAT_FILE_GROUP_DESCRIPTOR = 0xc000
+    CB_FORMAT_FILE_GROUP_DESCRIPTOR = 0xc000,
+    CB_FORMAT_HTML
 };
 
 /* Size of a clipboard channel header ([MS-RDPECLIP] 2.2.1) */
@@ -597,6 +598,59 @@ clipboard_in_utf16_le_as_utf8(struct stream *s, char *text,
 }
 
 /*****************************************************************************/
+/**
+ * Sets an offset in a CF_HTML header
+ *
+ * @param header null-terminated header string
+ * @param offset_name Name of offset, plus terminating colon
+ * @param value to set in the field
+ * *return 0 for success
+ *
+ * The specification for CF_HTML specifically allows fields in the header
+ * to be zero-padded on the left, so they can be filled in later.
+ *
+ * We allow 8 characters for each value we set with this function.
+ * say).
+ */
+#define HDR_FIELD_WIDTH 8
+#define HDR_FIELD_MAX_VALUE 99999999u /* HDR_FIELD_WIDTH * '9' */
+
+static int
+cf_html_set_offset(char header[],
+                   const char *offset_name, unsigned int value)
+{
+    int rv = 1;
+
+    char *offset_ptr;
+
+    if (value > HDR_FIELD_MAX_VALUE)
+    {
+        LOG(LOG_LEVEL_ERROR, "HTML payload is too large (%u chars)", value);
+    }
+    else if ((offset_ptr = g_strstr(header, offset_name)) != NULL)
+    {
+        // Move the offset pointer to the start of the value field
+        offset_ptr += strlen(offset_name);
+
+        // Check there's room in the buffer to update the value
+        if (strlen(offset_ptr) > HDR_FIELD_WIDTH)
+        {
+            // Save the character which g_snprintf() will overwrite
+            // with a terminator
+            char saved_char = *(offset_ptr + HDR_FIELD_WIDTH);
+
+            // Write the value, and restore the saved character
+            g_snprintf(offset_ptr, HDR_FIELD_WIDTH + 1, "%08u", value);
+            *(offset_ptr + HDR_FIELD_WIDTH) = saved_char;
+            rv = 0;
+        }
+    }
+
+    return rv;
+}
+#undef HDR_FIELD_WIDTH
+
+/*****************************************************************************/
 static int
 clipboard_send_format_announce(void)
 {
@@ -619,6 +673,7 @@ clipboard_send_format_announce(void)
         { XRDP_CB_TEXT, CF_UNICODETEXT, "" },
         { XRDP_CB_BITMAP, CF_DIB, ""},
         { XRDP_CB_FILE, CB_FORMAT_FILE_GROUP_DESCRIPTOR, "FileGroupDescriptorW" },
+        { XRDP_CB_HTML, CB_FORMAT_HTML, "HTML Format" },
         { XRDP_CB_NONE, 0, 0 }
     };
     const struct cliptype_map *p;
@@ -675,6 +730,27 @@ clipboard_send_format_announce(void)
     LOG_DEVEL_HEXDUMP(LOG_LEVEL_TRACE, "clipboard data:", s->data, size);
     LOG_DEVEL(LOG_LEVEL_DEBUG, "clipboard_send_format_announce: data out, sending "
               "CLIPRDR_FORMAT_ANNOUNCE (clip_msg_id = 2)");
+    rv = send_channel_data(g_cliprdr_chan_id, s->data, size);
+    free_stream(s);
+    return rv;
+}
+
+/*****************************************************************************/
+static int
+clipboard_send_data_response_failed(void)
+{
+    struct stream *s;
+    int size;
+    int rv;
+
+    LOG_DEVEL(LOG_LEVEL_ERROR, "clipboard_send_data_response_failed:");
+    make_stream(s);
+    init_stream(s, 64);
+    out_uint16_le(s, CB_FORMAT_DATA_RESPONSE); /* 5 CLIPRDR_DATA_RESPONSE */
+    out_uint16_le(s, CB_RESPONSE_FAIL); /* 2 status */
+    out_uint32_le(s, 0);
+    s_mark_end(s);
+    size = (int)(s->end - s->data);
     rv = send_channel_data(g_cliprdr_chan_id, s->data, size);
     free_stream(s);
     return rv;
@@ -739,34 +815,90 @@ clipboard_send_data_response_for_text(const char *data, int data_size)
 
 /*****************************************************************************/
 static int
+clipboard_send_data_response_for_html(const char *data, int data_size)
+{
+    char header[] =
+        "Version:0.9\r\n"
+        "StartHTML:-1\r\n"
+        "EndHTML:-1\r\n"
+        "StartFragment:00000000\r\n" // 8 char field (see cf_html_set_offset())
+        "EndFragment:00000000\r\n"   // 8 char field (see cf_html_set_offset())
+        "<!--StartFragment-->";
+    const char footer[] = "<!--EndFragment>\r\n";
+
+    struct stream *s;
+    int size;
+    int rv;
+    // Ignore the terminators on the end of the header and footer strings
+    unsigned int header_size = sizeof(header) - 1;
+    unsigned int footer_size = sizeof(footer) - 1;
+    unsigned int total_size = header_size + data_size + footer_size;
+
+    LOG_DEVEL(LOG_LEVEL_DEBUG,
+              "clipboard_send_data_response_for_html: total_size %d",
+              total_size);
+
+    if (cf_html_set_offset(header, "StartFragment:", header_size) ||
+            cf_html_set_offset(header, "EndFragment:", header_size + data_size))
+    {
+        rv = clipboard_send_data_response_failed();
+    }
+    else
+    {
+        make_stream(s);
+        init_stream(s, 64 + (int)total_size);
+        out_uint16_le(s, CB_FORMAT_DATA_RESPONSE); /* 5 CLIPRDR_DATA_RESPONSE */
+        out_uint16_le(s, CB_RESPONSE_OK); /* 1 status */
+        out_uint32_le(s, total_size); /* length */
+        out_uint8p(s, header, header_size);
+        out_uint8p(s, data, data_size);
+        out_uint8p(s, footer, footer_size);
+        s_mark_end(s);
+        size = (int)(s->end - s->data);
+        rv = send_channel_data(g_cliprdr_chan_id, s->data, size);
+        free_stream(s);
+    }
+    return rv;
+}
+
+/*****************************************************************************/
+static int
 clipboard_send_data_response(int xrdp_clip_type, const char *data, int data_size)
 {
     LOG_DEVEL(LOG_LEVEL_DEBUG, "clipboard_send_data_response:");
-    if (data != 0)
+    int rv = 0;
+    if (data != NULL)
     {
-        if (xrdp_clip_type == XRDP_CB_FILE)
+        switch (xrdp_clip_type)
         {
-            return clipboard_send_data_response_for_file(data, data_size);
-        }
-        else if (xrdp_clip_type == XRDP_CB_BITMAP)
-        {
-            return clipboard_send_data_response_for_image(data, data_size);
-        }
-        else if (xrdp_clip_type == XRDP_CB_TEXT)
-        {
-            return clipboard_send_data_response_for_text(data, data_size);
-        }
-        else
-        {
-            LOG_DEVEL(LOG_LEVEL_DEBUG, "clipboard_send_data_response: unknown "
-                      "xrdp_clip_type %d", xrdp_clip_type);
+            case XRDP_CB_FILE:
+                rv = clipboard_send_data_response_for_file(data, data_size);
+                break;
+
+            case XRDP_CB_BITMAP:
+                rv = clipboard_send_data_response_for_image(data, data_size);
+                break;
+
+            case XRDP_CB_TEXT:
+                rv = clipboard_send_data_response_for_text(data, data_size);
+                break;
+
+            case XRDP_CB_HTML:
+                rv = clipboard_send_data_response_for_html(data, data_size);
+                break;
+
+            default:
+                LOG_DEVEL(LOG_LEVEL_DEBUG, "clipboard_send_data_response: "
+                          "unknown xrdp_clip_type %d", (int)xrdp_clip_type);
+                (void)clipboard_send_data_response_failed();
+                rv = 1;
         }
     }
     else
     {
         LOG_DEVEL(LOG_LEVEL_ERROR, "clipboard_send_data_response: data is nil");
     }
-    return 0;
+    return rv;
 }
 
 /*****************************************************************************/
@@ -896,7 +1028,7 @@ clipboard_refuse_selection(XSelectionRequestEvent *req)
 }
 
 /*****************************************************************************/
-/* sent by client or server when its local system clipboard is
+/* sent by client when its local system clipboard is
    updated with new clipboard data; contains Clipboard Format ID
    and name pairs of new Clipboard Formats on the clipboard. */
 static int
@@ -998,27 +1130,6 @@ clipboard_process_format_ack(struct stream *s, int clip_msg_status,
 }
 
 /*****************************************************************************/
-static int
-clipboard_send_data_response_failed(void)
-{
-    struct stream *s;
-    int size;
-    int rv;
-
-    LOG_DEVEL(LOG_LEVEL_ERROR, "clipboard_send_data_response_failed:");
-    make_stream(s);
-    init_stream(s, 64);
-    out_uint16_le(s, CB_FORMAT_DATA_RESPONSE); /* 5 CLIPRDR_DATA_RESPONSE */
-    out_uint16_le(s, CB_RESPONSE_FAIL); /* 2 status */
-    out_uint32_le(s, 0);
-    s_mark_end(s);
-    size = (int)(s->end - s->data);
-    rv = send_channel_data(g_cliprdr_chan_id, s->data, size);
-    free_stream(s);
-    return rv;
-}
-
-/*****************************************************************************/
 /* sent from server to client
  * sent by recipient of CB_FORMAT_LIST; used to request data for one
  * of the formats that was listed in CB_FORMAT_LIST */
@@ -1036,6 +1147,33 @@ clipboard_process_data_request(struct stream *s, int clip_msg_status,
     in_uint32_le(s, requestedFormatId);
     switch (requestedFormatId)
     {
+        case CB_FORMAT_HTML:
+            x11_type = g_clip_s2c.x11_type[XRDP_CB_HTML];
+            if (x11_type == None)
+            {
+                // Client shouldn't have asked for this as we didn't
+                // advertise it.
+                LOG(LOG_LEVEL_DEBUG,
+                    "outbound clipboard(html) was not advertised");
+                clipboard_send_data_response_failed();
+            }
+            else if ((g_clip_s2c.xrdp_clip_type == XRDP_CB_HTML) && g_clip_s2c.converted)
+            {
+                LOG_DEVEL(LOG_LEVEL_DEBUG, "clipboard_process_data_request: CB_HTML");
+                clipboard_send_data_response(XRDP_CB_HTML, g_clip_s2c.data,
+                                             g_clip_s2c.total_bytes);
+            }
+            else
+            {
+                LOG_DEVEL(LOG_LEVEL_DEBUG, "clipboard_process_data_request: CB_HTML, "
+                          "calling XConvertSelection to %s",
+                          get_atom_text(x11_type));
+                g_clip_s2c.xrdp_clip_type = XRDP_CB_HTML;
+                g_clip_s2c.converted = 0;
+                XConvertSelection(g_display, g_clipboard_atom, x11_type,
+                                  g_clip_property_atom, g_wnd, CurrentTime);
+            }
+            break;
         case CB_FORMAT_FILE_GROUP_DESCRIPTOR:
             x11_type = g_clip_s2c.x11_type[XRDP_CB_FILE];
             if (x11_type == None)
@@ -1804,6 +1942,7 @@ process_x11_formats_announce(const XSelectionEvent *lxevent,
     Atom got_utf8 = None;
     Atom got_bmp_image = None;
     Atom got_file_atom = None;
+    Atom got_html = None;
     int rv = 0;
 
     unsigned int index;
@@ -1840,9 +1979,13 @@ process_x11_formats_announce(const XSelectionEvent *lxevent,
         {
             got_file_atom = atom;
         }
+        else if (atom == g_html_atom)
+        {
+            got_html = atom;
+        }
         else
         {
-            LOG_DEVEL(LOG_LEVEL_ERROR, "process_x11_formats_announce: "
+            LOG_DEVEL(LOG_LEVEL_INFO, "process_x11_formats_announce: "
                       "unknown atom %s", get_atom_text(atom));
         }
     }
@@ -1889,6 +2032,19 @@ process_x11_formats_announce(const XSelectionEvent *lxevent,
         else
         {
             g_clip_s2c.x11_type[XRDP_CB_BITMAP] = got_bmp_image;
+        }
+    }
+
+    if (got_html != None)
+    {
+        if (g_cfg->restrict_outbound_clipboard & CLIP_RESTRICT_TEXT)
+        {
+            LOG(LOG_LEVEL_DEBUG,
+                "outbound clipboard(html) is restricted because of config");
+        }
+        else
+        {
+            g_clip_s2c.x11_type[XRDP_CB_HTML] = got_html;
         }
     }
 
@@ -2081,6 +2237,21 @@ clipboard_event_selection_notify(XEvent *xevent)
                     g_memcpy(g_clip_s2c.data, data, g_clip_s2c.total_bytes);
                     g_clip_s2c.data[g_clip_s2c.total_bytes] = 0;
                     clipboard_send_data_response_for_file(g_clip_s2c.data,
+                                                          g_clip_s2c.total_bytes);
+
+                }
+            }
+            else if (lxevent->target == g_html_atom)
+            {
+                LOG_DEVEL(LOG_LEVEL_DEBUG, "clipboard_event_selection_notify: text/html "
+                          "data_size %d", data_size);
+                if ((g_clip_s2c.incr_in_progress == 0) && (data_size > 0))
+                {
+                    g_free(g_clip_s2c.data);
+                    g_clip_s2c.total_bytes = data_size;
+                    g_clip_s2c.data = (char *) g_malloc(g_clip_s2c.total_bytes, 0);
+                    g_memcpy(g_clip_s2c.data, data, g_clip_s2c.total_bytes);
+                    clipboard_send_data_response_for_html(g_clip_s2c.data,
                                                           g_clip_s2c.total_bytes);
 
                 }
