@@ -18,6 +18,7 @@ test_common_SOURCES = \
     test_list_calls.c \
     test_list16_calls.c \
     test_parse.c \
+    test_set_int.c \
     test_string_calls.c \
     test_string_calls_unicode.c \
     test_os_calls.c \

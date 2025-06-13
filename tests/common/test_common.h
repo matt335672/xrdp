@@ -11,6 +11,7 @@ Suite *make_suite_test_fifo(void);
 Suite *make_suite_test_list(void);
 Suite *make_suite_test_list16(void);
 Suite *make_suite_test_parse(void);
+Suite *make_suite_test_set_int(void);
 Suite *make_suite_test_string(void);
 Suite *make_suite_test_string_unicode(void);
 Suite *make_suite_test_os_calls(void);

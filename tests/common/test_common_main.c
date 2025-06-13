@@ -50,6 +50,7 @@ int main (void)
     srunner_add_suite(sr, make_suite_test_list());
     srunner_add_suite(sr, make_suite_test_list16());
     srunner_add_suite(sr, make_suite_test_parse());
+    srunner_add_suite(sr, make_suite_test_set_int());
     srunner_add_suite(sr, make_suite_test_string());
     srunner_add_suite(sr, make_suite_test_string_unicode());
     srunner_add_suite(sr, make_suite_test_os_calls());
