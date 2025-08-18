@@ -309,7 +309,8 @@ send_set_desktop_size(struct vnc *v, const struct vnc_screen_layout *layout)
         out_uint32_be(s, layout->s[i].flags);
     }
     s_mark_end(s);
-    LOG(LOG_LEVEL_DEBUG, "VNC Sending SetDesktopSize");
+    LOG(LOG_LEVEL_DEBUG, "VNC_RESIZE: Sending SetDesktopSize %dx%d",
+        layout->total_width, layout->total_height);
     error = lib_send_copy(v, s);
     free_stream(s);
 
@@ -954,7 +955,7 @@ skip_encoding(struct vnc *v, int x, int y, int cx, int cy,
         {
             struct vnc_screen_layout layout = {0};
             LOG(LOG_LEVEL_DEBUG,
-                "Skipping RFB_ENC_EXTENDED_DESKTOP_SIZE encoding "
+                "VNC_RESIZE: Skipping RFB_ENC_EXTENDED_DESKTOP_SIZE encoding "
                 "x=%d, y=%d geom=%dx%d",
                 x, y, cx, cy);
             error = read_extended_desktop_size_rect(v, &layout);
@@ -1033,7 +1034,7 @@ find_matching_extended_rect(struct vnc *v,
                         match(x, y, cx, cy))
                 {
                     LOG(LOG_LEVEL_DEBUG,
-                        "VNC matched ExtendedDesktopSize rectangle "
+                        "VNC_RESIZE: VNC matched ExtendedDesktopSize rectangle "
                         "x=%d, y=%d geom=%dx%d",
                         x, y, cx, cy);
                     found = 1;
@@ -1433,6 +1434,9 @@ lib_framebuffer_update(struct vnc *v)
                 layout.total_height = cy;
                 error = read_extended_desktop_size_rect(v, &layout);
                 /* If this is a reply to a request from us, x == 1 */
+                LOG(LOG_LEVEL_DEBUG,
+                    "VNC_RESIZE: Read ExtendedDesktopSize %dx%d x=%d y=%d",
+                    layout.total_width, layout.total_height, x, y);
                 if (error == 0 && x != 1)
                 {
                     if (!vnc_screen_layouts_equal(&v->server_layout, &layout))

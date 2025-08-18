@@ -1436,6 +1436,28 @@ sync_dynamic_monitor_data(struct xrdp_wm *wm,
 }
 
 /******************************************************************************/
+static void
+dump_resize_queue_status(struct xrdp_mm *self)
+{
+    if (self->resize_data != NULL)
+    {
+        LOG(LOG_LEVEL_INFO, "VNC_RESIZE_Q: Resize data is non-NULL");
+    }
+    int i;
+    if (self->resize_queue == NULL)
+    {
+        LOG(LOG_LEVEL_INFO, "VNC_RESIZE_Q: Resize queue is empty");
+    }
+    else
+    {
+        for (i = 0; i < self->resize_queue->count ; ++i)
+        {
+            struct display_size_description *qrr = (struct display_size_description *)self->resize_queue->items[i];
+            LOG(LOG_LEVEL_INFO, "VNC_RESIZE_Q: queue[%d] : %dx%d", i, qrr->session_width, qrr->session_height);
+        }
+    }
+}
+/******************************************************************************/
 static int
 dynamic_monitor_data(intptr_t id, int chan_id, char *data, int bytes)
 {
@@ -1519,6 +1541,9 @@ dynamic_monitor_data(intptr_t id, int chan_id, char *data, int bytes)
         g_free(display_size_data);
         return error;
     }
+    LOG(LOG_LEVEL_INFO, "VNC_RESIZE_Q: Queueing resize data request from dynamic_monitor_data %dx%d",
+        display_size_data->session_width, display_size_data->session_height);
+    dump_resize_queue_status(wm->mm);
     list_add_item(wm->mm->resize_queue, (tintptr)display_size_data);
     g_set_wait_obj(wm->mm->resize_ready);
     LOG(LOG_LEVEL_DEBUG, "dynamic_monitor_data:"
@@ -1967,6 +1992,8 @@ xrdp_mm_drdynvc_up(struct xrdp_mm *self)
     ignore_marker = (struct display_control_monitor_layout_data *)
                     g_malloc(sizeof(struct display_control_monitor_layout_data),
                              1);
+    LOG(LOG_LEVEL_INFO, "VNC_RESIZE_Q: Queueing resize data request from ignore_marker 0x0");
+    dump_resize_queue_status(self);
     list_add_item(self->resize_queue, (tintptr)ignore_marker);
     return error;
 }
@@ -4715,6 +4742,9 @@ client_monitor_resize(struct xrdp_mod *mod, int width, int height,
         free(display_size_data);
         return error;
     }
+    LOG(LOG_LEVEL_INFO, "Queueing resize data request from client %dx%d",
+        display_size_data->session_width, display_size_data->session_height);
+    dump_resize_queue_status(wm->mm);
     list_add_item(wm->mm->resize_queue, (tintptr)display_size_data);
     g_set_wait_obj(wm->mm->resize_ready);
 
