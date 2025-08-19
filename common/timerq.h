@@ -32,16 +32,17 @@ struct timerq;
 
 /**
  * Initialise a timer queue
+ * @param callback1 Queue-level object passe to timer events
  * @return pointer to queue, or NULL of no memory
  */
 struct timerq *
-timerq_init(void);
+timerq_init(void *callback1);
 
 /**
  * Add an event to a timer queue
  * @param timerq Timer queue
  * @param trigger_time number of milliseconds in future to trigger event
- * @param closure Pointer to pass to the timer event
+ * @param closure2 Pointer to pass to the timer event
  * @param callback Callback for event
  *
  * @return Event ID ( >= 0) or -1 for no memory
@@ -49,8 +50,9 @@ timerq_init(void);
 long
 timerq_add_event(struct timerq *timerq,
                  int trigger_time,
-                 void *closure,
-                 int (*callback)(void *closure, struct timerq *timerq));
+                 void *closure2,
+                 int (*callback)(void *closure1, void *closure2,
+                                 struct timerq *timerq));
 
 /**
  * Remove an event from a timer queue

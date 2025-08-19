@@ -37,6 +37,7 @@ struct timerq
      * Store events in reverse order, so the next one due to fire is the
      * last on the list. This makes removal easier */
     struct list *events;
+    void *closure1;
     long next_event_id;
 };
 
@@ -44,14 +45,14 @@ struct event
 {
     unsigned int add_time;  // Time event was added from_g_get_elapsed_ms()
     int trigger_time;
-    void *closure;
-    int (*callback)(void *closure, struct timerq *timerq);
+    void *closure2;
+    int (*callback)(void *closure1, void *closure2, struct timerq *timerq);
     long id;
 };
 
 /******************************************************************************/
 struct timerq *
-timerq_init(void)
+timerq_init(void *closure1)
 {
     struct timerq *tq = (struct timerq *)malloc(sizeof(*tq));
     if (tq != NULL)
@@ -60,6 +61,7 @@ timerq_init(void)
         if (tq->events != NULL)
         {
             tq->events->auto_free = 1;
+            tq->closure1 = closure1;
             tq->next_event_id = 1;
         }
         else
@@ -75,8 +77,9 @@ timerq_init(void)
 long
 timerq_add_event(struct timerq *timerq,
                  int trigger_time,
-                 void *closure,
-                 int (*callback)(void *closure, struct timerq *timerq))
+                 void *closure2,
+                 int (*callback)(void *closure1, void *closure2,
+                                 struct timerq *timerq))
 {
     long rv = -1;
 
@@ -95,7 +98,7 @@ timerq_add_event(struct timerq *timerq,
             // Fill in the new event
             event->add_time = now;
             event->trigger_time = trigger_time;
-            event->closure = closure;
+            event->closure2 = closure2;
             event->callback = callback;
             event->id = timerq->next_event_id++;
 
@@ -183,12 +186,12 @@ timerq_fire_events(struct timerq *timerq)
 
         // Remove the event before the callback (potentially)
         // messes with the queue
-        void *closure = event->closure;
-        int (*callback)(void *, struct timerq *) = event->callback;
+        void *closure2 = event->closure2;
+        int (*callback)(void *, void *, struct timerq *) = event->callback;
         list_remove_item(timerq->events, i);
 
         // Call the callback.
-        int callback_rv = (*callback)(closure, timerq);
+        int callback_rv = (*callback)(timerq->closure1, closure2, timerq);
         if (rv == 0)
         {
             rv = callback_rv;
