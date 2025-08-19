@@ -154,7 +154,12 @@ struct vnc
     int (*server_chansrv_in_use)(struct vnc *v);
     void (*server_init_xkb_layout)(struct vnc *v,
                                    struct xrdp_client_info *client_info);
-    tintptr server_dumby[100 - 29]; /* align, 100 minus the number of server
+    long (*server_add_timer_event)(struct vnc *v,
+                                   int trigger_time,
+                                   int (*callback)(struct vnc *v));
+    void (*server_cancel_timer_event)(struct vnc *v, long event_id);
+
+    tintptr server_dumby[100 - 31]; /* align, 100 minus the number of server
                                      functions above */
     /* common */
     tintptr handle; /* pointer to self as long */

@@ -35,6 +35,7 @@
 #include "xrdp_sockets.h"
 #include "xrdp_egfx.h"
 #include "libxrdp.h"
+#include "timerq.h"
 #include "xrdp_channel.h"
 #include <limits.h>
 
@@ -4071,6 +4072,52 @@ server_init_xkb_layout(struct xrdp_mod *mod,
     xrdp_init_xkb_layout(client_info);
 }
 
+/*****************************************************************************/
+/* Helper function for server_add_timer_event() */
+static int
+server_timer_cb(void *closure1, void *closure2,
+                struct timerq *timerq /* unused */)
+{
+    int rv = 0;
+    typedef int (*cb_type)(struct xrdp_mod * v);
+
+    struct xrdp_process *pro = (struct xrdp_process *)closure1;
+    struct xrdp_wm *wm;
+    struct xrdp_mm *mm;
+    struct xrdp_mod *mod;
+
+    // Follow the chain of obects to the module, checking each step,
+    // just in case we get a late event when things are being deallocated.
+    if (pro && (wm = pro->wm) != NULL &&
+            (mm = wm->mm) != NULL && (mod = mm->mod) != NULL)
+    {
+        cb_type callback = (cb_type)closure2;
+        rv = (*callback)(mod);
+    }
+
+    return rv;
+}
+
+/*****************************************************************************/
+static long
+server_add_timer_event(struct xrdp_mod *v,
+                       int trigger_time,
+                       int (*callback)(struct xrdp_mod *v))
+{
+    struct xrdp_wm *wm = (struct xrdp_wm *)v->wm;
+    struct xrdp_process *pro = wm->pro_layer;
+    return timerq_add_event(pro->timerq, trigger_time,
+                            callback, server_timer_cb);
+}
+
+/*****************************************************************************/
+static void
+server_cancel_timer_event(struct xrdp_mod *v, long event_id)
+{
+    struct xrdp_wm *wm = (struct xrdp_wm *)v->wm;
+    struct xrdp_process *pro = wm->pro_layer;
+    timerq_cancel_event(pro->timerq, event_id);
+}
 
 /*****************************************************************************/
 static int
@@ -5257,6 +5304,8 @@ xrdp_mm_setup_mod1(struct xrdp_mm *self)
             self->mod->server_bell_trigger = server_bell_trigger;
             self->mod->server_chansrv_in_use = server_chansrv_in_use;
             self->mod->server_init_xkb_layout = server_init_xkb_layout;
+            self->mod->server_add_timer_event = server_add_timer_event;
+            self->mod->server_cancel_timer_event = server_cancel_timer_event;
             self->mod->server_fill_rect = server_fill_rect;
             self->mod->server_screen_blt = server_screen_blt;
             self->mod->server_paint_rect = server_paint_rect;

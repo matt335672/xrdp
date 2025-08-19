@@ -23,6 +23,7 @@
 #endif
 
 #include "xrdp.h"
+#include "timerq.h"
 
 static int g_session_id = 0;
 
@@ -44,6 +45,7 @@ xrdp_process_create(struct xrdp_listen *owner, tbus done_event)
     g_snprintf(event_name, 255, "xrdp_%8.8x_process_self_term_event_%8.8x",
                pid, self->session_id);
     self->self_term_event = g_create_wait_obj(event_name);
+    self->timerq = timerq_init(self);
     return self;
 }
 
@@ -255,7 +257,7 @@ xrdp_process_main_loop(struct xrdp_process *self)
         while (cont)
         {
             /* build the wait obj list */
-            timeout = -1;
+            timeout = timerq_time_to_next_event(self->timerq);
             robjs_count = 0;
             wobjs_count = 0;
             robjs[robjs_count++] = term_obj;
@@ -290,6 +292,11 @@ xrdp_process_main_loop(struct xrdp_process *self)
             }
 
             if (trans_check_wait_objs(self->server_trans) != 0)
+            {
+                break;
+            }
+
+            if (timerq_fire_events(self->timerq) != 0)
             {
                 break;
             }

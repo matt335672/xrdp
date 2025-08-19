@@ -48,6 +48,7 @@
 
 struct source_info;
 struct list16;
+struct timerq;
 
 /* lib */
 struct xrdp_mod
@@ -131,6 +132,10 @@ struct xrdp_mod
     int (*server_chansrv_in_use)(struct xrdp_mod *v);
     void (*server_init_xkb_layout)(struct xrdp_mod *v,
                                    struct xrdp_client_info *client_info);
+    long (*server_add_timer_event)(struct xrdp_mod *v,
+                                   int trigger_time,
+                                   int (*callback)(struct xrdp_mod *v));
+    void (*server_cancel_timer_event)(struct xrdp_mod *v, long event_id);
     /* off screen bitmaps */
     int (*server_create_os_surface)(struct xrdp_mod *v, int rdpindex,
                                     int width, int height);
@@ -200,7 +205,7 @@ struct xrdp_mod
                            char *cmd, int cmd_bytes,
                            char *data, int data_bytes);
     int (*server_set_pointer_system)(struct xrdp_mod *v, int pointer_type);
-    tintptr server_dumby[100 - 52]; /* align, 100 minus the number of server
+    tintptr server_dumby[100 - 54]; /* align, 100 minus the number of server
                                      functions above */
     /* common */
     tintptr handle; /* pointer to self as int */
@@ -621,6 +626,7 @@ struct xrdp_process
     //int app_sck;
     tbus done_event;
     int session_id;
+    struct timerq *timerq;
 };
 
 /* rdp listener */

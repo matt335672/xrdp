@@ -125,6 +125,10 @@ struct mod
     int (*server_chansrv_in_use)(struct mod *v);
     void (*server_init_xkb_layout)(struct mod *v,
                                    struct xrdp_client_info *client_info);
+    long (*server_add_timer_event)(struct mod *v,
+                                   int trigger_time,
+                                   int (*callback)(struct mod *v));
+    void (*server_cancel_timer_event)(struct mod *v, long event_id);
     /* off screen bitmaps */
     int (*server_create_os_surface)(struct mod *v, int rdpindex,
                                     int width, int height);
@@ -191,7 +195,7 @@ struct mod
                            char *cmd, int cmd_bytes,
                            char *data, int data_bytes);
     int (*server_set_pointer_system)(struct mod *v, int pointer_type);
-    tintptr server_dumby[100 - 52]; /* align, 100 minus the number of server
+    tintptr server_dumby[100 - 54]; /* align, 100 minus the number of server
                                      functions above */
     /* common */
     tintptr handle; /* pointer to self as long */
