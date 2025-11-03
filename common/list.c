@@ -47,7 +47,7 @@ list_create_sized(unsigned int size)
     {
         size = DEFAULT_LIST_SIZE;
     }
-    self = (struct list *)calloc(sizeof(struct list), 1);
+    self = (struct list *)calloc(1, sizeof(struct list));
     if (self != NULL)
     {
         self->items = (tbus *)malloc(sizeof(tbus) * size);
