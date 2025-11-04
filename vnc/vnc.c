@@ -360,7 +360,9 @@ resize_client_to_server(struct vnc *v, int update_in_progress)
     int error = 0;
     unsigned int i;
     const struct vnc_screen_layout *sl = &v->server_layout;
+    ALLOW_ZERO_INITIALIZER_BEGIN
     struct monitor_info client_mons[CLIENT_MONITOR_DATA_MAXIMUM_MONITORS] = {0};
+    ALLOW_ZERO_INITIALIZER_END
 
     if (sl->count <= 0 ||
             sl->count > CLIENT_MONITOR_DATA_MAXIMUM_MONITORS)
@@ -960,7 +962,9 @@ skip_encoding(struct vnc *v, int x, int y, int cx, int cy,
 
         case RFB_ENC_EXTENDED_DESKTOP_SIZE:
         {
+            ALLOW_ZERO_INITIALIZER_BEGIN
             struct vnc_screen_layout layout = {0};
+            ALLOW_ZERO_INITIALIZER_END
             LOG(LOG_LEVEL_DEBUG,
                 "VNC_RESIZE: Skipping RFB_ENC_EXTENDED_DESKTOP_SIZE encoding "
                 "x=%d, y=%d geom=%dx%d",
@@ -1184,7 +1188,9 @@ static int
 lib_framebuffer_first_update(struct vnc *v)
 {
     int error;
+    ALLOW_ZERO_INITIALIZER_BEGIN
     struct vnc_screen_layout layout = {0};
+    ALLOW_ZERO_INITIALIZER_END
 
     error = find_matching_extended_rect(v,
                                         rect_is_initial_geometry,
@@ -1257,7 +1263,9 @@ static int
 lib_framebuffer_waiting_for_resize_confirm(struct vnc *v)
 {
     int error;
+    ALLOW_ZERO_INITIALIZER_BEGIN
     struct vnc_screen_layout layout = {0};
+    ALLOW_ZERO_INITIALIZER_END
     int response_code = 0;
 
     error = find_matching_extended_rect(v,
@@ -1337,7 +1345,9 @@ static int
 lib_framebuffer_look_for_forwarded_layout(struct vnc *v)
 {
     int error;
+    ALLOW_ZERO_INITIALIZER_BEGIN
     struct vnc_screen_layout layout = {0};
+    ALLOW_ZERO_INITIALIZER_END
     int x = 0;
     int y = 0;
 
@@ -1432,7 +1442,9 @@ lib_framebuffer_update(struct vnc *v)
     int need_size;
     struct stream *s;
     struct stream *pixel_s;
+    ALLOW_ZERO_INITIALIZER_BEGIN
     struct vnc_screen_layout layout = { 0 };
+    ALLOW_ZERO_INITIALIZER_END
 
     num_recs = 0;
 
@@ -2228,6 +2240,7 @@ receive_server_init(struct vnc *v)
 static int
 set_pixel_format(struct vnc *v)
 {
+    ALLOW_ZERO_INITIALIZER_BEGIN
     struct
     {
         unsigned char bits_per_pixel;
@@ -2240,6 +2253,7 @@ set_pixel_format(struct vnc *v)
         unsigned char green_shift;
         unsigned char blue_shift;
     } pixel_format = {0};
+    ALLOW_ZERO_INITIALIZER_BEGIN
 
     int rv;
     struct stream *s;

@@ -524,9 +524,11 @@ xrdp_bitmap_load_bmp(struct xrdp_bitmap *self, const char *filename,
     int len = 0;
     int row = 0;
     int row_size = 0;
+    ALLOW_ZERO_INITIALIZER_BEGIN
     int bmp_palette[256] = {0};
     char fixed_header[14] = {0};
     struct xrdp_bmp_header header = {0};
+    ALLOW_ZERO_INITIALIZER_END
     struct stream *s = (struct stream *)NULL;
     /* Pointer to row data processing function */
     void (*process_row_data)(struct xrdp_bitmap * self,

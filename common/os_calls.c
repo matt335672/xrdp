@@ -1445,12 +1445,14 @@ g_sck_recv_fd_set(int sck, void *ptr, unsigned int len,
     // present for recvmsg() - just use a big buffer.
     //
     // Use a union, so control_un.control is properly aligned.
+    ALLOW_ZERO_INITIALIZER_BEGIN
     union
     {
         struct cmsghdr cm;
         unsigned char control[8192];
     } control_un;
     struct msghdr msg = {0};
+    ALLOW_ZERO_INITIALIZER_END
 
     *fdcount = 0;
 
@@ -1545,7 +1547,9 @@ g_sck_send_fd_set(int sck, const void *ptr, unsigned int len,
 {
     int rv = -1;
 #if !defined(_WIN32)
+    ALLOW_ZERO_INITIALIZER_BEGIN
     struct msghdr msg = {0};
+    ALLOW_ZERO_INITIALIZER_END
 
     /* Set up descriptor for vanilla data */
     struct iovec iov[1] = { {(void *)ptr, len} };
@@ -1693,8 +1697,10 @@ g_sck_can_recv(int sck, int millis)
 int
 g_sck_select(int sck1, int sck2)
 {
+    ALLOW_ZERO_INITIALIZER_BEGIN
     struct pollfd pollfd[2] = {0};
     int rvmask[2] = {0}; /* Output masks corresponding to fds in pollfd */
+    ALLOW_ZERO_INITIALIZER_END
 
     unsigned int i = 0;
     int rv = 0;

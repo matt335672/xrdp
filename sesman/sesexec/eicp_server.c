@@ -144,7 +144,9 @@ handle_logout_request(struct trans *self)
 static int
 handle_create_session_request(struct trans *self)
 {
+    ALLOW_ZERO_INITIALIZER_BEGIN
     struct session_parameters sp = {0};
+    ALLOW_ZERO_INITIALIZER_END
     int status;
 
     status = eicp_get_create_session_request(

@@ -381,10 +381,9 @@ static struct fuse_lowlevel_ops g_xfuse_ops; /* setup FUSE callbacks        */
 static int g_xfuse_inited = 0;               /* true when FUSE is inited    */
 static struct fuse_session *g_se = 0;
 // For the below, see the source for the fuse_session_loop() function
-static struct fuse_buf g_buffer =
-{
-    .mem = NULL
-};
+ALLOW_ZERO_INITIALIZER_BEGIN
+static struct fuse_buf g_buffer = {0};
+ALLOW_ZERO_INITIALIZER_END
 
 /* forward declarations for internal access */
 static int xfuse_init_xrdp_fs(void);
@@ -2593,7 +2592,9 @@ static void xfuse_cb_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr,
     }
     else
     {
+        ALLOW_ZERO_INITIALIZER_BEGIN
         struct file_attr attrs = {0};
+        ALLOW_ZERO_INITIALIZER_END
         tui32 change_mask = 0;
 
         if ((to_set & FUSE_SET_ATTR_MODE) && xinode->mode != attr->st_mode)
@@ -2790,7 +2791,9 @@ static void xfuse_cb_statfs(fuse_req_t req, fuse_ino_t ino)
     else if (!xinode->is_redirected)
     {
         /* specified file is a local resource */
+        ALLOW_ZERO_INITIALIZER_BEGIN
         struct statvfs vfs_stats = {0};
+        ALLOW_ZERO_INITIALIZER_END
         if (g_cfg->fuse_root_report_max_free)
         {
             // Report an 95% free max-size filesystem
