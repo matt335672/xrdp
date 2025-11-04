@@ -42,12 +42,15 @@
 #include <fdk-aac/aacenc_lib.h>
 static HANDLE_AACENCODER g_fdk_aac_encoder = 0;
 
+#if defined(AACENCODER_LIB_VL0)
 #define AACENCODER_LIB_VER_GTEQ(vl0, vl1, vl2) \
-    (defined(AACENCODER_LIB_VL0) && \
-     ((AACENCODER_LIB_VL0 > vl0) || \
-      (AACENCODER_LIB_VL0 == vl0 && AACENCODER_LIB_VL1 >= vl1) || \
-      (AACENCODER_LIB_VL0 == vl0 && AACENCODER_LIB_VL1 == vl1 && AACENCODER_LIB_VL2 > vl2)))
-#endif
+    ((AACENCODER_LIB_VL0 > vl0) || \
+     (AACENCODER_LIB_VL0 == vl0 && AACENCODER_LIB_VL1 > vl1) || \
+     (AACENCODER_LIB_VL0 == vl0 && AACENCODER_LIB_VL1 == vl1 && AACENCODER_LIB_VL2 >= vl2))
+#else
+#define AACENCODER_LIB_VER_GTEQ(vl0, vl1, vl2) 0
+#endif // AACENCODER_LIB_VL0
+#endif // XRDP_FDK_AAC
 
 #if defined(XRDP_OPUS)
 #include <opus/opus.h>
