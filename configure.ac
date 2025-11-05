@@ -229,6 +229,10 @@ AX_CFLAGS_WARN_ALL
 AX_APPEND_COMPILE_FLAGS([-Wwrite-strings])
 AX_APPEND_COMPILE_FLAGS([-Wmissing-prototypes], ,[-Werror])
 AX_APPEND_COMPILE_FLAGS([-Wextra])
+# xrdp uses many zero initializers (C99 6.7.8.21). These
+# require the warning regarding missing field initializers to
+# be disabled.
+AX_APPEND_COMPILE_FLAGS([-Wno-missing-field-initializers])
 AX_APPEND_COMPILE_FLAGS([-Wno-unused-parameter])
 AX_APPEND_COMPILE_FLAGS([-Wno-sign-compare])
 
