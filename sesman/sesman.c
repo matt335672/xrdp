@@ -631,9 +631,7 @@ read_pid_file(const char *pid_file, int *pid)
     }
     else
     {
-        ALLOW_ZERO_INITIALIZER_BEGIN
         char pid_s[32] = {0};
-        ALLOW_ZERO_INITIALIZER_END
         int error = g_file_read(fd, pid_s, sizeof(pid_s) - 1);
         g_file_close(fd);
 
@@ -694,9 +692,7 @@ main(int argc, char **argv)
     enum logReturns log_error;
     char text[256];
     char pid_file[256];
-    ALLOW_ZERO_INITIALIZER_BEGIN
     struct sesman_startup_params startup_params = {0};
-    ALLOW_ZERO_INITIALIZER_END
     int errored_argc;
     int daemon;
 

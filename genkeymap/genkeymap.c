@@ -254,16 +254,7 @@ output_file_section(FILE *outf,
         .serial = 16,
         .send_event = True,
         .display = dpy,
-        .window = 0, // Unused
-        .root = 0, // Unused
-        .subwindow = 0, // Unused
-        .time = 0, // Unused
-        .x = 0, // Unused
-        .y = 0, // Unused
-        .x_root = 0, // Unused
-        .y_root = 0, // Unused
         .state = event_state,
-        .keycode = 0, // Overwritten below
         .same_screen = True
     };
     int char_count;
@@ -345,14 +336,6 @@ is_caps_lock_supported(Display *dpy)
         .serial = 16,
         .send_event = True,
         .display = dpy,
-        .window = 0, // Unused
-        .root = 0, // Unused
-        .subwindow = 0, // Unused
-        .time = 0, // Unused
-        .x = 0, // Unused
-        .y = 0, // Unused
-        .x_root = 0, // Unused
-        .y_root = 0, // Unused
         .state = 0,
         .keycode = scancode_to_x11_keycode(SCANCODE_CAPS_KEY),
         .same_screen = True

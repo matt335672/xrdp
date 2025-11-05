@@ -33,19 +33,6 @@
 #undef MAKELONG
 #define MAKELONG(lo, hi) ((((hi) & 0xffff) << 16) | ((lo) & 0xffff))
 #define UNUSED_VAR(x) ((void) (x))
-// Zero initializers (C99 6.7.8.21) are very useful, but can fail with
-// -Wmissing-field-initializers. This macro allows for an explicit
-// zero initializer
-#if defined (__GNUC__) || defined (__clang__)
-#define ALLOW_ZERO_INITIALIZER_BEGIN \
-    _Pragma("GCC diagnostic push") \
-    _Pragma("GCC diagnostic ignored \"-Wmissing-field-initializers\"")
-#define ALLOW_ZERO_INITIALIZER_END \
-    _Pragma("GCC diagnostic pop")
-#else
-#define ALLOW_ZERO_INITIALIZER_BEGIN
-#define ALLOW_ZERO_INITIALIZER_END
-#endif
 
 /* graphics macros */
 #define MAKERECT(r, x, y, cx, cy) \

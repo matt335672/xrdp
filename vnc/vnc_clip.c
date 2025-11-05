@@ -909,9 +909,7 @@ vnc_clip_process_channel_data(struct vnc *v, char *data, int size,
         /* this is a complete packet
          * Construct a temp stream for the complete packet, and pass it
          * to the application */
-        ALLOW_ZERO_INITIALIZER_BEGIN
         struct stream packet_s = {0};
-        ALLOW_ZERO_INITIALIZER_END
 
         packet_s.data = data;
         packet_s.size = size;

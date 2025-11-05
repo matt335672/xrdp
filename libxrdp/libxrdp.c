@@ -2240,9 +2240,7 @@ libxrdp_init_display_size_description(
 {
     unsigned int monitor_index;
     struct monitor_info *monitor_layout;
-    ALLOW_ZERO_INITIALIZER_BEGIN
     struct xrdp_rect all_monitors_encompassing_bounds = {0};
-    ALLOW_ZERO_INITIALIZER_END
     int got_primary = 0;
 
     /* Caller should have checked this, so don't log an error */

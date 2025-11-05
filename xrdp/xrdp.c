@@ -550,9 +550,7 @@ main(int argc, char **argv)
 {
     int exit_status = 1;
     enum logReturns error;
-    ALLOW_ZERO_INITIALIZER_BEGIN
     struct xrdp_startup_params startup_params = {0};
-    ALLOW_ZERO_INITIALIZER_END
     int pid;
     int daemon_pid = 0;
     int daemon;

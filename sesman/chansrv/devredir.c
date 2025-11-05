@@ -2353,15 +2353,11 @@ devredir_proc_cid_statfs(IRP *irp,
 {
     struct stream *s;
     int            bytes;
-    ALLOW_ZERO_INITIALIZER_BEGIN
     char size_info_struct[FILE_FS_FULL_SIZE_INFORMATION_SIZE] = {0};
-    ALLOW_ZERO_INITIALIZER_END
 
     if (IoStatus != STATUS_SUCCESS)
     {
-        ALLOW_ZERO_INITIALIZER_BEGIN
         struct statvfs fss = {0};
-        ALLOW_ZERO_INITIALIZER_END
         LOG_DEVEL(LOG_LEVEL_DEBUG,
                   "statfs returned with IoStatus=0x%x", IoStatus);
 
@@ -2399,9 +2395,7 @@ devredir_proc_cid_statfs_resp(IRP *irp,
                               struct stream *s_in,
                               enum NTSTATUS IoStatus)
 {
-    ALLOW_ZERO_INITIALIZER_BEGIN
     struct statvfs fss = {0};
-    ALLOW_ZERO_INITIALIZER_END
     tui32 Length;
     if (IoStatus == STATUS_SUCCESS)
     {
