@@ -245,7 +245,7 @@ xrdp_orders_send_window_icon(struct xrdp_orders *self,
 static int
 xrdp_orders_send_as_unicode(struct stream *s, const char *text)
 {
-    unsigned int text_len = strlen(text);
+    unsigned int text_len = (text == NULL) ? 0 : strlen(text);
     int i32 = utf8_as_utf16_word_count(text, text_len) * 2;
 
     out_uint16_le(s, i32);
@@ -257,7 +257,7 @@ xrdp_orders_send_as_unicode(struct stream *s, const char *text)
 static int
 xrdp_orders_get_unicode_bytes(const char *text)
 {
-    unsigned int text_len = strlen(text);
+    unsigned int text_len = (text == NULL) ? 0 : strlen(text);
     /* Add 1 to word size to include length ([MS-RDPERP] 2.2.1.2.1) */
     return (utf8_as_utf16_word_count(text, text_len) + 1) * 2;
 }
@@ -302,7 +302,15 @@ xrdp_orders_send_window_new_update(struct xrdp_orders *self, int window_id,
     if (field_present_flags & WINDOW_ORDER_FIELD_TITLE)
     {
         /* titleInfo */
-        order_size += xrdp_orders_get_unicode_bytes(window_state->title_info);
+        /* Check the requested feature is available */
+        if (window_state->title_info == NULL)
+        {
+            field_present_flags &= ~WINDOW_ORDER_FIELD_TITLE;
+        }
+        else
+        {
+            order_size += xrdp_orders_get_unicode_bytes(window_state->title_info);
+        }
     }
 
     if (field_present_flags & WINDOW_ORDER_FIELD_CLIENT_AREA_OFFSET)
@@ -360,8 +368,16 @@ xrdp_orders_send_window_new_update(struct xrdp_orders *self, int window_id,
     if (field_present_flags & WINDOW_ORDER_FIELD_WND_RECTS)
     {
         /* numWindowRects (2 bytes) */
-        order_size += 2;
-        order_size += 8 * window_state->num_window_rects;
+        /* Check the requested feature is available */
+        if (window_state->window_rects == NULL)
+        {
+            field_present_flags &= ~WINDOW_ORDER_FIELD_WND_RECTS;
+        }
+        else
+        {
+            order_size += 2;
+            order_size += 8 * window_state->num_window_rects;
+        }
     }
 
     if (field_present_flags & WINDOW_ORDER_FIELD_VIS_OFFSET)
@@ -375,8 +391,16 @@ xrdp_orders_send_window_new_update(struct xrdp_orders *self, int window_id,
     if (field_present_flags & WINDOW_ORDER_FIELD_VISIBILITY)
     {
         /* numVisibilityRects (2 bytes) */
-        order_size += 2;
-        order_size += 8 * window_state->num_visibility_rects;
+        /* Check the requested feature is available */
+        if (window_state->visibility_rects == NULL)
+        {
+            field_present_flags &= ~WINDOW_ORDER_FIELD_VISIBILITY;
+        }
+        else
+        {
+            order_size += 2;
+            order_size += 8 * window_state->num_visibility_rects;
+        }
     }
 
     if (order_size < 12)

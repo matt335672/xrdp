@@ -735,6 +735,9 @@ xrdp_mm_process_rail_show_window(struct xrdp_mm *self, struct stream *s)
     g_memset(&rwso, 0, sizeof(rwso));
     in_uint32_le(s, window_id);
     in_uint32_le(s, flags);
+    /* show_window carries only a show state; no other field is populated */
+    flags &= (WINDOW_ORDER_TYPE_WINDOW | WINDOW_ORDER_STATE_NEW |
+              WINDOW_ORDER_FIELD_SHOW);
     in_uint32_le(s, rwso.show_state);
     LOG(LOG_LEVEL_DEBUG, "xrdp_mm_process_rail_show_window 0x%8.8x %x", window_id,
         rwso.show_state);
